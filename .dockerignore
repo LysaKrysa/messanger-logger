@@ -1,0 +1,8 @@
+.git
+.env
+.env.*
+__pycache__/
+*.pyc
+session.json
+message_logs/
+error.txt

@@ -1,0 +1,11 @@
+aenum==3.1.15
+attrs==23.2.0
+beautifulsoup4==4.12.3
+certifi
+charset-normalizer==3.3.2
+idna==3.7
+paho-mqtt==1.6.1
+requests==2.32.3
+soupsieve==2.5
+urllib3==1.26.20
+telepota
