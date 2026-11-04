@@ -73,7 +73,7 @@ Git and Go **1.26.10**.
 ### 1. Get the source
 
 ```bash
-git clone https://github.com/LysaKrysa/messenger-logger.git messenger-modern
+git clone https://github.com/LysaKrysa/fblog.git messenger-modern
 cd messenger-modern
 cp messenger.env.example ../messenger.env
 chmod 600 ../messenger.env
@@ -254,7 +254,7 @@ Run on the VM as the `ubuntu` user:
 
 ```bash
 cd ~
-git clone https://github.com/LysaKrysa/messenger-logger.git messenger-modern
+git clone https://github.com/LysaKrysa/fblog.git messenger-modern
 cd messenger-modern
 cp messenger.env.example ../messenger.env
 chmod 600 ../messenger.env
