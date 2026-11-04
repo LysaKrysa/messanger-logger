@@ -1,0 +1,12 @@
+[Unit]
+Description=Expire Messenger local message data older than 72 hours
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=@DOCKER@ run --rm --log-driver none --mount type=bind,source=@DATA_DIR@,target=/data --mount type=bind,source=@CODE_DIR@,target=/app,readonly --entrypoint python @IMAGE@ /app/logger.py --cleanup
+TimeoutStartSec=300
+StandardOutput=journal
+StandardError=journal

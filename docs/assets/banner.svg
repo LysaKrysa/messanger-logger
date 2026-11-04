@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="360" viewBox="0 0 1200 360" role="img" aria-labelledby="title description">
+  <title id="title">Messenger Logger</title>
+  <desc id="description">A self-hosted, receive-only Messenger archive with media capture, Telegram topics, and 72-hour local retention.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#0b1225"/><stop offset="1" stop-color="#172442"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#38bdf8"/><stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop stop-color="#6366f1" stop-opacity=".24"/><stop offset="1" stop-color="#6366f1" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="360" rx="24" fill="url(#background)"/>
+  <circle cx="1020" cy="120" r="280" fill="url(#glow)"/>
+  <path d="M750 0v360M0 308h1200" stroke="#33476a" stroke-opacity=".32"/>
+  <g font-family="DejaVu Sans,Arial,sans-serif">
+    <rect x="48" y="42" width="8" height="16" rx="4" fill="#67e8f9"/>
+    <text x="70" y="55" fill="#9fb8d9" font-size="12" font-weight="700" letter-spacing="2.2">SELF-HOSTED · RECEIVE-ONLY · LINUX</text>
+    <text x="48" y="143" fill="#f8fafc" font-size="62" font-weight="700" letter-spacing="-2.5">Messenger Logger</text>
+    <text x="50" y="191" fill="#cbd5e1" font-size="23">Live conversations. A smaller local archive.</text>
+    <text x="50" y="237" fill="#8fa7c8" font-size="16">Messages + media</text>
+    <circle cx="222" cy="231" r="2" fill="#67e8f9"/>
+    <text x="238" y="237" fill="#8fa7c8" font-size="16">Telegram topics</text>
+    <circle cx="385" cy="231" r="2" fill="#a78bfa"/>
+    <text x="402" y="237" fill="#8fa7c8" font-size="16">72-hour local retention</text>
+    <text x="50" y="338" fill="#8198b9" font-size="12" letter-spacing=".7">PYTHON + PINNED NATIVE TRANSPORT</text>
+    <text x="1128" y="338" text-anchor="end" fill="#8198b9" font-size="12" letter-spacing=".7">OPEN SOURCE</text>
+    <rect x="795" y="48" width="340" height="92" rx="15" fill="#101e36" stroke="#365171"/>
+    <rect x="815" y="68" width="40" height="40" rx="12" fill="url(#accent)"/>
+    <path d="M824 79h22v14h-12l-6 5v-5h-4z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
+    <text x="873" y="83" fill="#e2e8f0" font-size="15" font-weight="700">Message captured</text>
+    <rect x="874" y="97" width="204" height="5" rx="2.5" fill="#334c6c"/>
+    <rect x="874" y="109" width="140" height="5" rx="2.5" fill="#263d5a"/>
+    <rect x="820" y="155" width="315" height="62" rx="13" fill="#12233b" stroke="#365171"/>
+    <path d="M841 183l6 6 11-13" fill="none" stroke="#67e8c6" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="876" y="192" fill="#c7d8ee" font-size="15">Media saved locally</text>
+    <rect x="847" y="233" width="288" height="45" rx="22.5" fill="#243255"/>
+    <circle cx="871" cy="255.5" r="7" fill="none" stroke="#b8a4ff" stroke-width="1.7"/>
+    <path d="M871 251v5l3 2" fill="none" stroke="#b8a4ff" stroke-width="1.7" stroke-linecap="round"/>
+    <text x="891" y="261" fill="#ddd6fe" font-size="14">72h local content window</text>
+  </g>
+</svg>

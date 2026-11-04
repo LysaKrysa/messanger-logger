@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+LOGGER_CODE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LOGGER_ENV_FILE="${LOGGER_ENV_FILE:-$(dirname -- "$LOGGER_CODE_DIR")/messenger.env}"
+exec docker run --rm --log-driver none \
+  --env-file "$LOGGER_ENV_FILE" \
+  --mount "type=bind,source=$LOGGER_CODE_DIR,target=/app,readonly" \
+  --entrypoint python "${LOGGER_IMAGE:-messenger-logger:modern}" \
+  /app/check_telegram_topics.py

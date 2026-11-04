@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+LOGGER_CODE_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LOGGER_DATA_DIR="${LOGGER_DATA_DIR:-$(dirname -- "$LOGGER_CODE_DIR")/messenger-data}"
+exec docker run --rm \
+  --mount "type=bind,source=$LOGGER_DATA_DIR,target=/data" \
+  --mount "type=bind,source=$LOGGER_CODE_DIR,target=/app,readonly" \
+  --entrypoint python "${LOGGER_IMAGE:-messenger-logger:modern}" \
+  /app/view_messages.py "$@"

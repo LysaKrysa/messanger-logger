@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Messenger local retention every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=15s
+Unit=messenger-retention.service
+
+[Install]
+WantedBy=timers.target
