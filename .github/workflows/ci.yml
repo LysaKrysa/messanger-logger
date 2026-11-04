@@ -1,0 +1,61 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run synthetic and offline tests
+        run: python -m unittest discover -s tests -v
+      - name: Check Bash syntax
+        run: |
+          bash -n show-messages
+          bash -n show-deleted
+          bash -n manage-topics
+          bash -n cleanup-local-data
+          bash -n check-telegram-topics
+          bash -n server/install-service.sh
+
+  native-container:
+    name: Native build and container smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Build pinned transport and runtime image
+        run: docker build --tag messenger-logger:ci .
+      - name: Check binary and local RPC without credentials
+        run: docker run --rm --network none messenger-logger:ci --self-test
+      - name: Run the suite with the native binary
+        run: |
+          docker run --rm --network none \
+            --env BRIDGE_TEST_BIN=/usr/local/bin/messenger-bridge \
+            --mount "type=bind,source=$PWD/tests,target=/app/tests,readonly" \
+            --entrypoint python messenger-logger:ci \
+            -m unittest discover -s tests -v

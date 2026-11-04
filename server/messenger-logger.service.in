@@ -1,0 +1,25 @@
+[Unit]
+Description=Messenger local logger and Telegram relay
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+StartLimitIntervalSec=900
+StartLimitBurst=5
+
+[Service]
+Type=simple
+UMask=0077
+WorkingDirectory=@CODE_DIR@
+ExecStartPre=@DOCKER@ run --rm --log-driver none --mount type=bind,source=@DATA_DIR@,target=/data --mount type=bind,source=@CODE_DIR@,target=/app,readonly --entrypoint python @IMAGE@ /app/logger.py --cleanup
+ExecStart=@DOCKER@ run --rm --name messenger-logger --stop-timeout 30 --log-driver none --env-file @ENV_FILE@ --mount type=bind,source=@DATA_DIR@,target=/data --mount type=bind,source=@CODE_DIR@,target=/app,readonly @IMAGE@
+ExecStop=-@DOCKER@ stop --time 30 messenger-logger
+Restart=on-failure
+RestartSec=60
+RestartPreventExitStatus=78
+TimeoutStartSec=300
+TimeoutStopSec=60
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

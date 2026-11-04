@@ -1,60 +1,408 @@
-# Messenger Message Logger — cookie-only Railway package
+<div align="center">
 
-Modified from https://github.com/MS-Jahan/Messenger-Message-Logger
-Includes the author's fbchat v1 source: https://github.com/MS-Jahan/fbchat/tree/v1
-The included fbchat LICENSE applies to that library. The logger repository did not supply a license in its root; upstream rights remain with its author.
+![Messenger Logger — live conversations, a small local archive](docs/assets/banner.svg)
 
-## Authentication
-Only FB_SESSION_JSON is accepted. No email, password, OTP, or password-login fallback is enabled. If cookies are missing, malformed, expired or rejected, the worker exits with status 1. Refresh the Railway variable and redeploy. A persisted session file is not a fallback when the variable is absent. Cookie input is never intentionally printed.
+**A self-hosted archive for the conversations happening now.**
 
-Accepted formats:
-- A JSON object: {"c_user":"YOUR_ID","xs":"YOUR_VALUE", ...}
-- A browser-export array: [{"name":"c_user","value":"YOUR_ID"},{"name":"xs","value":"YOUR_VALUE"}, ...]
+Capture live Messenger messages and media, track observed unsends, and optionally
+organize Telegram copies into a topic for each conversation.
 
-Use real cookie values from your own signed-in browser. Developer Tools > Application/Storage > Cookies > Facebook shows them. Include the other Facebook cookies present in your session as well. cookies.example.json is only a format example. Do not upload real cookies to GitHub.
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](#requirements)
+[![Linux](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-0F172A?style=flat-square&logo=linux&logoColor=white)](#requirements)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)](#quick-start)
+[![License](https://img.shields.io/badge/License-AGPL--3.0--or--later-7C3AED?style=flat-square)](LICENSE)
 
-## Deploy on Railway
-1. Extract this ZIP.
-2. Create a GitHub repository and upload the CONTENTS of this folder, including fbchat. Dockerfile must be at the repository root. Do not upload the ZIP itself as the application.
-3. In Railway choose New Project > Deploy from GitHub repo, and select your repository.
-4. Open the service > Variables. Add FB_SESSION_JSON with your complete JSON object or array. Paste directly without extra surrounding quotes.
-5. Set USE_TELEGRAM=false for the first test (this is also the default).
-6. Attach a persistent volume to this service, mounted at /data.
-7. Use one replica. Disable Serverless/sleeping. Leave HTTP healthcheck, cron schedule, and public networking unset. Leave Start Command empty; Dockerfile supplies it.
-8. Deploy. The first deployment may fail until the variable and volume are set.
-9. Watch deployment logs for "Program Started! Cookie session accepted." Send a fresh test message to the account and verify logging.
+[Quick start](#quick-start) · [Telegram](#telegram-forwarding) · [Server setup](SERVER_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Contributing](CONTRIBUTING.md)
 
-No email/password variables, database, web server, PORT, or public domain are required.
-railway.json selects Dockerfile builds and limits failure restarts to three retries.
+</div>
 
-## Storage and cookie refresh
-Runtime files:
-- /data/session.json
-- /data/message_logs/<conversation>/<day>_<month>_<year>
+---
 
-The cookie variable seeds session.json every startup. During a run, the library's refreshed session is saved on reconnect. On the next process start, the variable takes precedence again. Update FB_SESSION_JSON when it expires, then redeploy. Never mount the volume on /app (it would hide application code).
-Use Railway's volume tools or a service shell to inspect/download logs. Keep backups; message logs can grow indefinitely. Runtime message timestamps default to the container timezone; set TZ if desired.
+## What it does
 
-## Optional Telegram
-Create a bot with @BotFather, send /start to it, and obtain the destination chat ID. Set:
-USE_TELEGRAM=true
-TELEGRAM_BOT_TOKEN=<token>
-TELEGRAM_CHAT_ID=<chat ID>
-Then redeploy. The worker sends a startup message and forwards logged events. In groups, add your bot and use the group chat ID.
+| Feature | Behavior |
+| :--- | :--- |
+| **Live capture** | Incoming/outgoing text, attachments, replies, mentions, edits, reactions, and observed unsends. |
+| **Regular + encrypted chats** | A pinned native bridge handles both transports. |
+| **Downloaded media** | Save supported images, video, GIFs, stickers, audio, voice messages, and files locally. |
+| **Deleted-message view** | Inspect content captured before a deletion, including original text and the latest captured edit. |
+| **Telegram topics** | Optionally forward copies into a topic for each Messenger conversation. |
+| **72-hour local retention** | Expire local content and media automatically. Telegram copies stay in Telegram. |
+| **Content-only logs** | Read/delivery receipts, typing, and presence do not become chat records. |
+| **Unattended operation** | Run on Ubuntu with systemd, restart handling, and a separate cleanup timer. |
 
-## Local launch
-Use Python 3.11. Install requirements.txt, set FB_SESSION_JSON, and optionally DATA_DIR to a writable local folder, then run python railway_start.py. For Railway leave DATA_DIR unset (/data).
+> [!IMPORTANT]
+> This is an **unofficial, best-effort Messenger integration**, not a Meta product.
+> It saves events the transport delivers. It cannot recover content deleted
+> before capture, and it deliberately does not fetch old chat history.
 
-## Limitations and troubleshooting
-This is an archived unofficial Messenger integration. Hosting successfully does not guarantee current Facebook login, encrypted-chat access, or event delivery. No live Facebook account was used to test this package. It only captures events it actually receives while running; it does not recover messages deleted before capture.
+## How it works
 
-- Missing/invalid JSON: correct FB_SESSION_JSON; both c_user and xs must be non-empty strings.
-- Session rejected: refresh cookies and resolve any checkpoint in your own browser. Password fallback is intentionally disabled.
-- GraphQL, fb_dtsg or MQTT failures: upstream Facebook compatibility may be broken; changing Railway variables cannot repair the protocol.
-- Telegram failures: disable Telegram first to isolate Messenger; verify token and chat ID.
-- Logs disappear: attach the volume at /data before testing.
+```mermaid
+flowchart TD
+    A["Messenger account"] --> B["Pinned native bridge"]
+    B --> C["Python listener"]
+    C --> D["Local journal and media"]
+    C --> E["Optional Telegram copies"]
+    F["72-hour cleanup"] --> D
+```
 
-Only use your own account and conversations you are authorized to archive. Cookies grant account access: keep them in Railway Variables and out of repositories or screenshots. The upstream logger also prints some received message/event data, so restrict access to Railway deployment logs.
+The Python adapter uses the standard library. Docker builds the native bridge
+from exact upstream revisions and verifies pinned SHA-256 digests. The adapter
+exposes connection, receive, download, and bounded contact-lookup operations.
+It exposes no Messenger send, mark-read, or delete method.
 
-## Validation
-Syntax checks passed for every bundled Python file. Offline checks passed for object/array cookie parsing, malformed input rejection, the cookie-only constructor failure path, and the valid-session constructor path. Live Facebook connectivity and deployment are not verified.
+See [transport provenance](THIRD_PARTY.md) and [native development](docs/NATIVE_BUILD.md).
+
+## Requirements
+
+- A Linux host with Docker; Ubuntu with systemd for the server installer.
+- Linux **amd64** or **arm64** for the pinned native binary.
+- Git for a checkout; Python 3 on the host for the service installer.
+- An existing signed-in Facebook session for your own account.
+- Outbound Messenger connectivity and optional Telegram connectivity. No incoming app port is required.
+
+Windows users can connect to a Linux server over SSH or use a Linux environment
+such as WSL. Bash wrappers and `fcntl` locking are not native Windows tools.
+Development without Docker requires Python **3.11+**; native compilation requires
+Git and Go **1.26.10**.
+
+## Quick start
+
+### 1. Get the source
+
+```bash
+git clone https://github.com/LysaKrysa/messenger-logger.git messenger-modern
+cd messenger-modern
+cp messenger.env.example ../messenger.env
+chmod 600 ../messenger.env
+mkdir -p ../messenger-data
+chmod 700 ../messenger-data
+```
+
+Keep the environment file and runtime data outside the source checkout:
+
+| Path | Contents |
+| :--- | :--- |
+| `messenger-modern/` | Source checkout |
+| `messenger.env` | Private account and Telegram settings |
+| `messenger-data/` | Private archive, media, and encryption-device state |
+
+### 2. Configure your account
+
+```bash
+nano ../messenger.env
+```
+
+Replace the placeholders in `FB_SESSION_JSON` with your own session cookies.
+The required names are `c_user`, `xs`, and `datr`. Find them locally in your
+signed-in browser's developer tools under Facebook's Application/Storage cookies.
+A cookie object or browser-export array is accepted.
+
+```dotenv
+FB_SESSION_JSON={"c_user":"YOUR_NUMERIC_ACCOUNT_ID","xs":"YOUR_XS_COOKIE","datr":"YOUR_DATR_COOKIE"}
+LOGGER_E2EE=true
+LOGGER_TIMEZONE=Europe/Warsaw
+TELEGRAM_ENABLED=false
+```
+
+The example account ID is intentionally invalid until replaced. Keep the JSON
+on one line. Docker reads this as an env file: do not add `export` or extra
+quotes around the entire JSON value. Never commit the real environment file.
+Password login, CAPTCHA solving, and automated checkpoint handling are not supported.
+
+### 3. Build and validate
+
+```bash
+sudo docker build -t messenger-logger:modern .
+sudo docker run --rm messenger-logger:modern --self-test
+sudo docker run --rm \
+  --env-file "$(realpath ../messenger.env)" \
+  messenger-logger:modern --check-config
+```
+
+The first build downloads Go sources and compiles the bridge. It can take several
+minutes on a small VM. `--self-test` checks the binary and local RPC without login.
+`--check-config` checks cookie shape without authenticating; it does not prove
+that the session is valid.
+
+### 4. Test in the foreground
+
+```bash
+sudo docker run --rm --name messenger-logger-modern-test --stop-timeout 30 \
+  --env-file "$(realpath ../messenger.env)" \
+  --mount "type=bind,source=$(realpath ../messenger-data),target=/data" \
+  --mount "type=bind,source=$PWD,target=/app,readonly" \
+  messenger-logger:modern
+```
+
+Wait for `Messenger listener ready (regular and encrypted)`. Send a **new**
+message, then inspect it from another terminal:
+
+```bash
+sudo ./show-messages
+```
+
+Unsend that test message in Messenger, then inspect the captured deletion:
+
+```bash
+sudo ./show-deleted
+```
+
+Press **Ctrl+C in the foreground listener's terminal** when the test is complete.
+
+## Run continuously on a server
+
+After the foreground test passes:
+
+```bash
+sudo bash server/install-service.sh
+sudo systemctl status messenger-logger --no-pager
+sudo journalctl -u messenger-logger -f
+```
+
+The installer enables startup at boot and installs a separate retention timer.
+**Ctrl+C in `journalctl -f` closes only the log viewer.** The service keeps running
+after SSH closes or your PC shuts down. The server itself must remain powered on.
+
+Temporary failures restart after 60 seconds, subject to a start-rate limit.
+Authentication/checkpoint problems, invalid settings, account mismatches,
+incompatible binaries, and storage failures stop with status **78** for manual
+attention. The installer refuses to take over an unmanaged existing container.
+
+The [server guide](SERVER_SETUP.md) covers installation, container-name conflicts,
+cookie refresh, source updates, service controls, and cleanup checks.
+
+## Read your archive
+
+| Command | Result |
+| :--- | :--- |
+| `sudo ./show-messages` | Captured messages from the latest run |
+| `sudo ./show-deleted` | Messages observed as deleted/unsent in the selected run |
+| `sudo ./show-deleted --run all` | Deleted records across retained runs |
+| `sudo ./show-messages --limit 100` | Increase the display limit |
+| `sudo ./show-messages --json` | Structured records and attachment metadata |
+| `sudo ./show-messages --include-ids` | Include IDs for local troubleshooting |
+
+Views use a read-only, query-only SQLite connection. They do not log in or
+request history. Available names replace IDs in readable output; missing names
+appear as `Unknown participant`. `--run all` does not bypass retention.
+
+<details>
+<summary><strong>Example deleted-message view — synthetic data</strong></summary>
+
+```text
+DELETED / UNSENT
+Conversation: Weekend plans
+Sender: Alex (@alex.example)
+Sent: 2026-11-04T12:30:00+01:00
+Deletion observed: 2026-11-04T12:31:00+01:00
+Text: Here is the photo from today.
+```
+
+The real view also lists available attachment paths and statuses. If content was
+never captured, the view explicitly says it is unavailable.
+
+</details>
+
+## Telegram forwarding
+
+Telegram is optional and disabled by default. Create a bot with **@BotFather**,
+send `/start` to the bot, and obtain the intended destination chat ID.
+Edit your private `messenger.env`:
+
+```dotenv
+TELEGRAM_ENABLED=true
+TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
+TELEGRAM_CHAT_ID=YOUR_CHAT_ID
+TELEGRAM_MODE=deleted
+TELEGRAM_SEND_MEDIA=true
+TELEGRAM_TOPICS=true
+```
+
+For the service installation, reload settings with:
+
+```bash
+sudo systemctl restart messenger-logger
+```
+
+### One topic per conversation
+
+- **Private bot chat:** enable **Threaded mode** for the same bot in BotFather.
+- **Group:** use a supergroup with **Topics** enabled and grant the bot
+  administrator access with **Manage Topics**.
+- Also set `TELEGRAM_TOPICS=true` in the logger. BotFather and the logger have
+  separate settings.
+
+Topic IDs persist across restarts. Conversations with equal names remain
+separate. Text, files, edit/reaction notices, and observed deletions use the
+corresponding topic. Topics are created only when a new eligible event needs
+forwarding; existing Telegram messages are not reorganized.
+
+### Choose what is forwarded
+
+| Setting | Effect |
+| :--- | :--- |
+| `TELEGRAM_MODE=deleted` | Observed deletions using captured content |
+| `TELEGRAM_MODE=all` | Also newly accepted messages, files, edits, and reactions |
+| `TELEGRAM_SEND_MEDIA=true` | Upload available saved attachments as documents |
+| `TELEGRAM_VIEW_ONCE=true` | Separately opt in to immediate view-once copies |
+
+Notices use formatted text, resolved names, timestamps, and attachment captions.
+Document uploads preserve the saved bytes. Ambiguous sends are not automatically
+retried, avoiding duplicate delivery.
+
+### Check Threaded mode
+
+```bash
+sudo ./check-telegram-topics
+```
+
+This performs a fresh **read-only** check of the configured bot's public username,
+Telegram capability, destination type, and logger settings. It prints no token
+or cookies, sends no messages, creates no topics, and changes no local data.
+A setup problem returns exit status 2 with an explanation.
+
+A failed capability check has a 30-second cooldown. Restarting clears it.
+With deletion-only forwarding, test a fresh message **and unsend it**.
+Earlier failed notices are not replayed simply because settings changed.
+
+For topic-ID repair and unconfirmed creation, see [Telegram troubleshooting](docs/TELEGRAM.md).
+
+## Media and view-once content
+
+Supported attachments download only for newly admitted messages. The default
+limit is **25 MiB per attachment**, configurable up to **100 MiB**. The native
+bridge authenticates and decrypts encrypted downloads. Files use private
+permissions, sanitized names, and atomic writes; size and SHA-256 are recorded.
+
+Consumer/Raven view-once image/video wrappers and regular ephemeral labels are
+supported when usable download metadata reaches the client. Capture is best
+effort: an empty/unsupported event cannot yield a photo the client never received.
+View-once expiry is not automatically treated as an unsend.
+
+Ordinary links, link-preview images, locations, old media, and interrupted jobs
+are not downloaded automatically. Pending jobs become `interrupted` at restart.
+Regular-chat images may be previews rather than original-resolution uploads.
+
+## Three-day local retention
+
+**Local content expires 72 hours after capture.** Checks run at startup and about
+every five minutes. The independent server timer also runs while capture is
+stopped. After a VM outage, overdue cleanup runs when the server starts again.
+
+| Removed locally at expiry | Kept for continued operation |
+| :--- | :--- |
+| Text, original/latest edits, deletion records | Cookie configuration |
+| Related journal events and daily-log records | Encryption-device state |
+| Downloaded media and attachment metadata | Account association |
+| Structured copies of expired quoted replies | Minimal numeric Telegram topic routing IDs |
+| Obsolete labels and attempt records | Already sent Telegram messages and files |
+
+An edit, reaction, or unsend does not extend the original message's lifetime.
+Newer records in the same daily file remain. The earlier automatic migration
+snapshot is removed because it could preserve expired content. Cleanup calls
+no Telegram or Messenger deletion method.
+
+External copies, backups, and snapshots need their own retention. Application
+cleanup is not a forensic disk wipe. Unknown-format legacy files use their
+modification time when a record timestamp cannot be read.
+See [storage details](docs/STORAGE.md).
+
+## Configuration
+
+The complete template is [messenger.env.example](messenger.env.example).
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `FB_SESSION_JSON` | Required | Cookie object or browser-export array |
+| `LOGGER_E2EE` | `true` | Enable encrypted transport |
+| `LOGGER_TIMEZONE` | `Europe/Warsaw` | IANA timezone for dates and daily files |
+| `LOGGER_MEDIA_MAX_MB` | `25` | Attachment limit, integer 1–100 MiB |
+| `TELEGRAM_ENABLED` | `false` | Enable forwarding explicitly |
+| `TELEGRAM_MODE` | `deleted` | `deleted` or `all` |
+| `TELEGRAM_BOT_TOKEN` | Required if enabled | BotFather token; keep private |
+| `TELEGRAM_CHAT_ID` | Required if enabled | Intended destination chat ID |
+| `TELEGRAM_TOPICS` | `false` | One topic per conversation |
+| `TELEGRAM_SEND_MEDIA` | `true` | Upload available saved attachments |
+| `TELEGRAM_VIEW_ONCE` | `false` | Immediate view-once copies |
+| `DATA_DIR` | `/data` | Container-internal data path |
+| `BRIDGE_BIN` | `/usr/local/bin/messenger-bridge` | Container-internal binary path |
+
+Host view/media wrappers accept `LOGGER_DATA_DIR` and `LOGGER_IMAGE`; the service
+installer and Telegram checker accept `LOGGER_ENV_FILE`. Defaults are sibling
+`messenger-data` and `messenger.env` paths. Local retention is fixed at three days.
+
+## Coverage and limits
+
+- **Muted chats:** no mute filter is applied; delivered events are still accepted.
+- **Groups:** supported group messages keep their conversation and participant identity.
+- **Encrypted chats:** require encrypted transport readiness and working device state.
+- **Future events only:** messages created before each process startup are rejected,
+  even if replayed in a new envelope. Every run starts with fresh counters.
+- **Offline gaps:** missed events are not guaranteed to replay; history is not fetched.
+- **Names:** contact metadata and bounded read-only lookups improve labels.
+  Placeholders such as `username` are rejected; names remain best effort.
+- **Other callbacks:** friend requests, games, polls, calls, scheduled plans, and
+  separate group membership/admin/theme callbacks are not ported. User-visible
+  system messages supplied as text can still be captured.
+
+Test a fresh direct message, muted-chat message, group message, and supported
+attachment on your deployment. The unofficial protocol can change independently.
+
+## Development and tests
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+No Python packages are required. Tests use synthetic cookies/events and mocked
+Telegram requests. They send no Messenger messages or Telegram notices.
+A native RPC check is skipped unless a compatible binary is supplied:
+
+```bash
+BRIDGE_TEST_BIN=/absolute/path/to/messenger-bridge \
+  python3 -m unittest discover -s tests -v
+```
+
+There are **146 checks** covering event filtering, future-only admission, deletion
+tracking, journal recovery, media integrity, names, Telegram formatting/topics,
+retention, and restart exit codes. [VALIDATION.md](VALIDATION.md) distinguishes
+offline checks from live-account/server behavior.
+
+CI includes Python tests and a native Docker build/smoke test. Live account
+authentication is not a CI check.
+
+## Project map
+
+| Area | Files |
+| :--- | :--- |
+| Listener + native RPC | `logger.py`, `bridge_rpc.py` |
+| Storage + retention | `event_store.py`, `retention.py`, `view_messages.py` |
+| Media + identities | `media_saver.py`, `identities.py`, `contact_names.py` |
+| Telegram | `telegram_relay.py`, `telegram_format.py`, `telegram_topics.py` |
+| Read-only diagnosis | `check_telegram_topics.py`, `check-telegram-topics` |
+| Native build | `build_native.py`, `install_bridge.py`, `native/` |
+| Server operation | `server/`, `SERVER_SETUP.md` |
+| Tests + documentation | `tests/`, `docs/`, `VALIDATION.md` |
+
+## Contributing and security
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and [SECURITY.md](SECURITY.md)
+before attaching diagnostics. Keep real cookies, tokens, messages, media, device
+files, and database copies out of commits, issues, and pull requests.
+
+Use only accounts and conversations you are authorized to archive. Telegram
+forwarding sends selected content to your configured destination; local expiry
+does not revoke those copies. This project is not affiliated with Meta or Telegram.
+
+## License and credits
+
+Original project code and documentation are **AGPL-3.0-or-later**; see [LICENSE](LICENSE).
+Upstream components retain their own licenses and notices. The transport builds
+on [fbchat-v2](https://github.com/m008v/fbchat-v2),
+[mautrix-meta](https://github.com/mautrix/meta), and their dependencies.
+
+The former Railway/fbchat-v1 application is not bundled into this standalone
+source tree. See [THIRD_PARTY.md](THIRD_PARTY.md) and [NOTICE](NOTICE) for exact
+revisions, checksums, attribution, and license copies.

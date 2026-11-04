@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a reproducible problem with redacted or synthetic details.
+title: '[Bug]: '
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not paste cookies, bot tokens, private messages, photos, device.json,
+        databases, or full Docker inspect dumps. Read SECURITY.md before
+        posting vulnerability details.
+  - type: input
+    id: revision
+    attributes:
+      label: Revision
+      description: Commit SHA or source archive version.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: Ubuntu / amd64 or arm64 / Docker or local Python
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Expected and observed behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Use synthetic examples, without real conversation content.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Redacted operational diagnostics
+      description: Static errors or safe check-telegram-topics output, if relevant.
+      render: text

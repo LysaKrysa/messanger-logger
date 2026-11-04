@@ -1,0 +1,24 @@
+Messenger Logger
+Copyright (C) 2026 Messenger Logger contributors
+
+Original project code and documentation are distributed under the GNU Affero
+General Public License, version 3 or (at your option) any later version.
+
+The native transport is built separately from exact revisions of:
+
+  fbchat-v2, by its contributors
+  https://github.com/m008v/fbchat-v2
+  Upstream root license: Apache-2.0
+
+  mautrix-meta, by its contributors
+  https://github.com/mautrix/meta
+  Upstream root license: AGPL-3.0-or-later
+
+These components and transitive dependencies retain their original copyright
+notices and licenses. Build hooks and local additions are identified in
+build_native.py and native/. No compiled native transport or vendored upstream
+source is included in this repository.
+
+See THIRD_PARTY.md and LICENSES/ for exact revisions and license copies.
+The former Railway/fbchat-v1 application is not bundled in this source tree
+and is not relicensed by this project.
