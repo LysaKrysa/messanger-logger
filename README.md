@@ -10,9 +10,10 @@ organize Telegram copies into a topic for each conversation.
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](#requirements)
 [![Linux](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-0F172A?style=flat-square&logo=linux&logoColor=white)](#requirements)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat-square&logo=docker&logoColor=white)](#quick-start)
+[![Oracle Cloud guide](https://img.shields.io/badge/Oracle_Cloud-setup_guide-F80000?style=flat-square)](#deploy-on-oracle-cloud)
 [![License](https://img.shields.io/badge/License-AGPL--3.0--or--later-7C3AED?style=flat-square)](LICENSE)
 
-[Quick start](#quick-start) · [Telegram](#telegram-forwarding) · [Server setup](SERVER_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Contributing](CONTRIBUTING.md)
+[Quick start](#quick-start) · [Oracle Cloud](#deploy-on-oracle-cloud) · [Telegram](#telegram-forwarding) · [Server setup](SERVER_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -150,6 +151,171 @@ sudo ./show-deleted
 ```
 
 Press **Ctrl+C in the foreground listener's terminal** when the test is complete.
+
+## Deploy on Oracle Cloud
+
+This guide uses an Ubuntu VM in **Oracle Cloud Infrastructure (OCI)**. The logger
+runs on the VM independently of your PC or SSH session.
+
+### 1. Create an Ubuntu VM
+
+In the OCI Console, select your **home region**, then open **Compute → Instances
+→ Create instance**. Use the following starting configuration:
+
+| Setting | Suggested value |
+| :--- | :--- |
+| Image | Canonical **Ubuntu 24.04 LTS**, matching the selected architecture |
+| Shape | **VM.Standard.A1.Flex** (arm64), when eligible capacity is available |
+| Starting size | **1 OCPU / 6 GB RAM**, within your remaining free allocation |
+| Boot volume | **50 GB**, within your remaining storage allowance |
+| Capacity type | On-demand |
+| Networking | A public subnet with internet connectivity and a public IPv4 address |
+| SSH access | Add your public key or download the generated private key |
+
+A1 gives more build/runtime headroom than the 1 GB E2 micro option. Both arm64
+and amd64 are supported by this project's native build. If A1 capacity is
+unavailable, try another availability domain in the home region or wait.
+
+**Free-tier check — 4 November 2026:** Oracle documents an A1 allowance equivalent
+to **2 OCPUs / 12 GB RAM total** and **200 GB combined boot/block storage**.
+These are tenancy-wide allowances, not per-VM quotas. Verify remaining capacity,
+eligibility, and the creation summary before launching; trial credits and
+chargeable extras are separate. Oracle may reclaim idle Always Free instances.
+
+See Oracle's current [Always Free resources](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)
+and [instance creation guide](https://docs.oracle.com/en-us/iaas/Content/Compute/Tasks/launchinginstance.htm).
+
+For networking, the **VCN with Internet Connectivity** wizard can create the
+subnet, internet gateway, and routes. Allow SSH **TCP 22** from your own public
+IP/CIDR in the relevant network security group or subnet security list. Keep
+normal outbound internet access for builds and the Messenger/Telegram transports.
+The logger needs no inbound application port.
+
+### 2. Connect over SSH
+
+Once the instance is running, copy its public IP from the Console. Replace
+`YOUR_VM_PUBLIC_IP` below; keep the private key on your own computer.
+
+Windows PowerShell, from the directory containing your key:
+
+```powershell
+ssh -i ".\ssh-key.key" ubuntu@YOUR_VM_PUBLIC_IP
+```
+
+Linux/macOS:
+
+```bash
+chmod 600 ./ssh-key.key
+ssh -i ./ssh-key.key ubuntu@YOUR_VM_PUBLIC_IP
+```
+
+If SSH times out, check the VM's public IP, public-subnet route, SSH ingress
+rule, and your current client IP before changing the application.
+
+### 3. Install Docker and host tools
+
+If Docker already works on the VM, keep that installation and ensure Git and
+Python 3 are present. For a **fresh Ubuntu 24.04** VM, expand these commands:
+
+<details>
+<summary><strong>Install Docker Engine from its official Ubuntu apt repository</strong></summary>
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl git python3
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+sudo tee /etc/apt/sources.list.d/docker.sources >/dev/null <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: noble
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin
+sudo systemctl enable --now docker
+sudo docker run --rm hello-world
+```
+
+These commands use Ubuntu 24.04's `noble` repository and automatically select
+arm64/amd64. For another release or an existing/conflicting installation, follow
+[Docker's current Ubuntu instructions](https://docs.docker.com/engine/install/ubuntu/).
+
+</details>
+
+### 4. Configure and build the logger
+
+Run on the VM as the `ubuntu` user:
+
+```bash
+cd ~
+git clone https://github.com/LysaKrysa/messenger-logger.git messenger-modern
+cd messenger-modern
+cp messenger.env.example ../messenger.env
+chmod 600 ../messenger.env
+mkdir -p ../messenger-data
+chmod 700 ../messenger-data
+nano ../messenger.env
+```
+
+Fill in your own `FB_SESSION_JSON`. Keep `LOGGER_E2EE=true` for encrypted chats.
+Telegram is optional; configure its token, chat ID, and topic settings only if
+you want forwarding. The private env file and data folder stay outside Git.
+
+```bash
+sudo docker build -t messenger-logger:modern .
+sudo docker run --rm messenger-logger:modern --self-test
+sudo docker run --rm \
+  --env-file "$(realpath ../messenger.env)" \
+  messenger-logger:modern --check-config
+```
+
+Let the initial Go download/build finish. The image builds the correct native
+architecture on the VM. Before installing the service, run the
+[foreground test](#4-test-in-the-foreground), verify a fresh message, and stop
+that test with Ctrl+C.
+
+### 5. Enable unattended operation
+
+```bash
+cd ~/messenger-modern
+sudo bash server/install-service.sh
+sudo systemctl status messenger-logger --no-pager
+sudo journalctl -u messenger-logger -f
+```
+
+Wait for `Messenger listener ready (regular and encrypted)`. In another SSH
+session, check messages and the retention timer:
+
+```bash
+cd ~/messenger-modern
+sudo ./show-messages
+sudo ./show-deleted --run all
+sudo systemctl list-timers messenger-retention.timer --no-pager
+```
+
+**Ctrl+C in the journal viewer only closes that viewer.** You can then close
+SSH and turn off your PC. Systemd starts the logger at boot; the VM itself
+must remain running. Local content still expires after 72 hours and Telegram
+copies remain untouched.
+
+### 6. Maintain the VM
+
+```bash
+sudo docker stats --no-stream messenger-logger
+df -h ~/messenger-data
+sudo journalctl -u messenger-retention -n 20 --no-pager
+```
+
+Monitor memory, disk space, provider limits, and instance availability. After
+refreshing cookies in `~/messenger.env`, restart with
+`sudo systemctl restart messenger-logger`. Use the [server guide](SERVER_SETUP.md)
+for stopped services, container-name conflicts, source updates, and manual cleanup.
 
 ## Run continuously on a server
 
