@@ -27,12 +27,13 @@ raw bridge output, full Docker inspect dumps, or real conversation content.
 | Native Go modules still downloading | First builds need network and time; a running compiler can also be quiet. Check for a real error before interrupting. |
 | Logger ready but no old messages appear | History and pre-startup messages are deliberately excluded. Test a new message. |
 | Encrypted messages unavailable | Confirm `LOGGER_E2EE=true`, encrypted readiness, and persistent device state. |
-| Incoming/outgoing or group event missing | Test a fresh event after readiness; inspect safe transport diagnostics. Unsupported formats/offline gaps are possible. |
+| Incoming or group event missing | Test a fresh incoming event after readiness; inspect safe transport diagnostics. Unsupported formats/offline gaps are possible. |
+| My own messages are missing | Expected: the logger captures only other people's messages, excluding your outgoing content and quoted copies of its text. |
 | Sender shown as unknown | Name resolution is best effort; the placeholder is not treated as a real username. |
 | Deleted view has no content | The message was not captured before deletion or did not provide supported content. |
 | Attachment failed or interrupted | Inspect the local status; keys are not persisted for retry after restart. |
 | Empty view-once content | No usable transport/download information was received; existing empty records cannot recover bytes. |
-| No Telegram notices in deleted mode | Capture and then unsend a fresh message; ordinary messages alone are not forwarded in this mode. |
+| No Telegram notices in deleted mode | Ask another person to send a fresh message and unsend it after capture; your own messages are excluded. Pending media downloads finish before the combined notice is posted. |
 | Threaded mode still appears disabled | Run `check-telegram-topics`; compare the bot username and both independent settings. |
 | Unconfirmed topic | Bind the already-created topic with `manage-topics`; see the Telegram guide. |
 | Logs disappear after restart | Verify the persistent `/data` bind mount; also account for 72-hour expiry. |

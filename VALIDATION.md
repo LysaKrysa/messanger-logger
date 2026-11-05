@@ -2,6 +2,8 @@
 
 ## Incoming-only capture and single-notice downloads
 
+- 187 standalone tests passed with the pinned offline native RPC check, and
+  38 dashboard tests passed locally.
 - Authenticated sender admission excludes outgoing regular/encrypted messages,
   attachments, owner actions, and quoted owner text before content persistence.
 - Synthetic runtime tests verify incoming-only counters, dispatch, out-of-order

@@ -199,7 +199,7 @@ class LoggerRuntime:
             self.report("Connecting encrypted Messenger transport...")
             self.bridge.call("connectE2EE", timeout=180)
             self.bridge.wait_connected(encrypted=True, timeout=120, stop_event=self.stop)
-            self.report("Messenger listener ready (regular and encrypted). Send a fresh test message.")
+            self.report("Messenger listener ready (regular and encrypted). Ask another person to send a fresh test message.")
         else:
             self.report("Messenger listener ready for unencrypted chats only; encrypted transport is disabled in configuration.")
         self.media.start()

@@ -126,8 +126,9 @@ For each friend:
    with the intended person, then choose **Approve pairing**.
 6. Choose **Start** once cookies and pairing are saved. The page updates every
    15 seconds when no form is being edited. Wait for **Connected**.
-7. With the default **Deleted messages only** mode, send a fresh Messenger test
-   message, wait for capture, then unsend it to test forwarding.
+7. With the default **Deleted messages only** mode, ask another person to send
+   a fresh Messenger test message, wait for capture, then unsend it. The logged-in
+   account's own messages are excluded.
 
 One Telegram user can be paired to one Messenger account. Each private chat
 has its own Messenger conversation topics. The gateway checks the destination

@@ -44,8 +44,9 @@ immediately. The standalone diagnostic always performs a fresh check.
 Ready confirms setup and capability, not successful delivery or the existence
 of every saved topic. A send can still fail after the check passes.
 
-With `TELEGRAM_MODE=deleted`, send a new Messenger message and unsend it after
-capture. Sending an ordinary message alone is not a deletion-forwarding test.
+With `TELEGRAM_MODE=deleted`, ask another person to send you a new Messenger
+message and unsend it after capture. Your own messages are excluded. An ordinary
+incoming message alone is not a deletion-forwarding test.
 Setting changes do not replay earlier failed notices.
 
 ## Delivery behavior

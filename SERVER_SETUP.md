@@ -97,8 +97,9 @@ sudo systemctl status messenger-logger --no-pager
 sudo journalctl -u messenger-logger -f
 ```
 
-Wait for `Messenger listener ready (regular and encrypted)`. In another SSH
-session, send a fresh message and inspect it:
+Wait for `Messenger listener ready (regular and encrypted)`. Ask another person
+to send you a fresh message and then unsend it after capture. Your own outgoing
+messages are excluded. Inspect the incoming message in another SSH session:
 
 ```bash
 cd ~/messenger-modern

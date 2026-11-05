@@ -185,14 +185,14 @@ sudo docker run --rm --name messenger-logger-modern-test --stop-timeout 30 \
   messenger-logger:modern
 ```
 
-Wait for `Messenger listener ready (regular and encrypted)`. Send a **new**
-message, then inspect it from another terminal:
+Wait for `Messenger listener ready (regular and encrypted)`. Ask another person
+to send you a **new** message, then inspect it from another terminal:
 
 ```bash
 sudo ./show-messages
 ```
 
-Unsend that test message in Messenger, then inspect the captured deletion:
+Ask that person to unsend the test message, then inspect the captured deletion:
 
 ```bash
 sudo ./show-deleted
@@ -503,7 +503,8 @@ or cookies, sends no messages, creates no topics, and changes no local data.
 A setup problem returns exit status 2 with an explanation.
 
 A failed capability check has a 30-second cooldown. Restarting clears it.
-With deletion-only forwarding, test a fresh message **and unsend it**.
+With deletion-only forwarding, ask another person to send a fresh message and
+**unsend it after capture**. Your own messages are excluded.
 Earlier failed notices are not replayed simply because settings changed.
 
 For topic-ID repair and unconfirmed creation, see [Telegram troubleshooting](docs/TELEGRAM.md).
