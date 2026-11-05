@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ $EUID -ne 0 ]]; then
+  echo 'Run this administrator command with sudo.'
+  exit 1
+fi
+set -a
+source /etc/messenger-dashboard/service.env
+set +a
+cd /opt/messenger-dashboard/app
+exec /opt/messenger-dashboard/venv/bin/python -m dashboard.cli "$@"

@@ -5,7 +5,8 @@
 **A self-hosted archive for the conversations happening now.**
 
 Capture live Messenger messages and media, track observed unsends, and optionally
-organize Telegram copies into a topic for each conversation.
+organize Telegram copies into a topic for each conversation. An optional admin
+dashboard manages a small shared workspace with one Telegram bot.
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](#requirements)
 [![Linux](https://img.shields.io/badge/Linux-amd64%20%7C%20arm64-0F172A?style=flat-square&logo=linux&logoColor=white)](#requirements)
@@ -13,7 +14,7 @@ organize Telegram copies into a topic for each conversation.
 [![Oracle Cloud guide](https://img.shields.io/badge/Oracle_Cloud-setup_guide-F80000?style=flat-square)](#deploy-on-oracle-cloud)
 [![License](https://img.shields.io/badge/License-AGPL--3.0--or--later-7C3AED?style=flat-square)](LICENSE)
 
-[Quick start](#quick-start) · [Oracle Cloud](#deploy-on-oracle-cloud) · [Telegram](#telegram-forwarding) · [Server setup](SERVER_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Contributing](CONTRIBUTING.md)
+[Admin dashboard](#admin-dashboard--one-shared-bot) · [Quick start](#quick-start) · [Oracle Cloud](#deploy-on-oracle-cloud) · [Telegram](#telegram-forwarding) · [Server setup](SERVER_SETUP.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
 
@@ -31,6 +32,8 @@ organize Telegram copies into a topic for each conversation.
 | **72-hour local retention** | Expire local content and media automatically. Telegram copies stay in Telegram. |
 | **Content-only logs** | Read/delivery receipts, typing, and presence do not become chat records. |
 | **Unattended operation** | Run on Ubuntu with systemd, restart handling, and a separate cleanup timer. |
+| **Admin dashboard** | Manage up to six isolated account instances over HTTPS, replace cookies, and control capture. |
+| **One shared bot** | Expiring Telegram invites, administrator approval, destination checks, and a private conversation topic map per person. |
 
 > [!IMPORTANT]
 > This is an **unofficial, best-effort Messenger integration**, not a Meta product.
@@ -48,7 +51,8 @@ flowchart TD
     F["72-hour cleanup"] --> D
 ```
 
-The Python adapter uses the standard library. Docker builds the native bridge
+The standalone Python adapter uses the standard library. The optional dashboard
+adds Flask, cryptography, and Gunicorn. Docker builds the native bridge
 from exact upstream revisions and verifies pinned SHA-256 digests. The adapter
 exposes connection, receive, download, and bounded contact-lookup operations.
 It exposes no Messenger send, mark-read, or delete method.
@@ -61,19 +65,59 @@ See [transport provenance](THIRD_PARTY.md) and [native development](docs/NATIVE_
 - Linux **amd64** or **arm64** for the pinned native binary.
 - Git for a checkout; Python 3 on the host for the service installer.
 - An existing signed-in Facebook session for your own account.
-- Outbound Messenger connectivity and optional Telegram connectivity. No incoming app port is required.
+- Outbound Messenger connectivity and optional Telegram connectivity. The standalone logger requires no incoming app port; the optional HTTPS dashboard uses TCP 8443.
 
 Windows users can connect to a Linux server over SSH or use a Linux environment
 such as WSL. Bash wrappers and `fcntl` locking are not native Windows tools.
 Development without Docker requires Python **3.11+**; native compilation requires
 Git and Go **1.26.10**.
 
+## Admin dashboard + one shared bot
+
+The optional dashboard adds account setup, encrypted cookie storage, status,
+start/stop/restart controls, cookie replacement, and Telegram invitations. Each
+person receives notifications in their own private chat with the same bot;
+Messenger conversations remain separated into topics within that chat.
+
+The administrator creates a **single-use, 15-minute invitation**. The recipient
+opens it in Telegram, then the administrator approves that Telegram identity
+before starting the account. Workers receive individual gateway credentials;
+the shared bot token stays in the central service.
+
+For an existing Ubuntu installation with `messenger-logger:modern` already built:
+
+```bash
+sudo bash server/install-dashboard.sh --host YOUR_PUBLIC_IP_OR_HOSTNAME
+```
+
+This installs the dashboard alongside the existing logger. It prompts for an
+administrator password and prints the HTTPS URL and initial certificate
+fingerprint. Allow TCP 8443 in Oracle networking and the host firewall, then
+verify the fingerprint before trusting the initial self-signed certificate.
+No native rebuild is required.
+
+To move an existing systemd-managed logger into the dashboard after installation:
+
+```bash
+sudo messenger-dashboard-admin import-existing \
+  --env-file /home/ubuntu/messenger.env \
+  --data-dir /home/ubuntu/messenger-data \
+  --name "My account"
+```
+
+The import verifies the existing bot/private chat, stops the original logger
+before copying its archive/device state, and starts a managed account with the
+same destination. The original directory and its cleanup timer remain available
+for rollback. Earlier failed notifications are not replayed.
+
+**[Full dashboard setup, pairing, HTTPS, migration, and recovery guide →](docs/DASHBOARD.md)**
+
 ## Quick start
 
 ### 1. Get the source
 
 ```bash
-git clone https://github.com/LysaKrysa/fblog.git messenger-modern
+git clone https://github.com/LysaKrysa/messenger-logger.git messenger-modern
 cd messenger-modern
 cp messenger.env.example ../messenger.env
 chmod 600 ../messenger.env
@@ -254,7 +298,7 @@ Run on the VM as the `ubuntu` user:
 
 ```bash
 cd ~
-git clone https://github.com/LysaKrysa/fblog.git messenger-modern
+git clone https://github.com/LysaKrysa/messenger-logger.git messenger-modern
 cd messenger-modern
 cp messenger.env.example ../messenger.env
 chmod 600 ../messenger.env

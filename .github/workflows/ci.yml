@@ -31,6 +31,10 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Run synthetic and offline tests
         run: python -m unittest discover -s tests -v
+      - name: Install optional dashboard dependencies
+        run: python -m pip install -r requirements-dashboard.txt
+      - name: Check administrator dashboard and account isolation
+        run: python -m unittest discover -s dashboard/tests -v
       - name: Check Bash syntax
         run: |
           bash -n show-messages
@@ -39,6 +43,34 @@ jobs:
           bash -n cleanup-local-data
           bash -n check-telegram-topics
           bash -n server/install-service.sh
+          bash -n server/install-dashboard.sh
+          bash -n server/dashboard-admin
+
+  dashboard-browser:
+    name: Dashboard browser flow
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install browser test dependencies
+        run: |
+          python -m pip install -r requirements-dashboard.txt playwright==1.64.1
+          if ! command -v google-chrome >/dev/null; then
+            python -m playwright install --with-deps chromium
+          fi
+      - name: Verify administrator flow and mobile layout
+        run: python -m dashboard.tests.browser_smoke
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: dashboard-screenshots
+          path: dashboard-screenshots/
+          retention-days: 3
 
   native-container:
     name: Native build and container smoke test
@@ -52,6 +84,11 @@ jobs:
         run: docker build --tag messenger-logger:ci .
       - name: Check binary and local RPC without credentials
         run: docker run --rm --network none messenger-logger:ci --self-test
+      - name: Verify real managed containers with synthetic offline workers
+        run: |
+          python3 -m venv "$RUNNER_TEMP/dashboard-test-venv"
+          "$RUNNER_TEMP/dashboard-test-venv/bin/python" -m pip install -r requirements-dashboard.txt
+          sudo "$RUNNER_TEMP/dashboard-test-venv/bin/python" -m dashboard.tests.container_smoke --image messenger-logger:ci
       - name: Run the suite with the native binary
         run: |
           docker run --rm --network none \

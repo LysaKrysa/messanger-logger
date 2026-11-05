@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark"><title>{% block title %}Messenger workspace{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}"><script src="{{ url_for('static', filename='app.js') }}" defer></script></head>
+<body data-refresh="{{ 'true' if request.method == 'GET' and request.endpoint in ['index','account'] else 'false' }}"><div class="shell">
+<aside class="sidebar"><a class="brand" href="{{ url_for('index') }}"><span class="brand-icon">m<span>↗</span></span><span>messenger<span class="brand-sub">PRIVATE WORKSPACE</span></span></a>
+<div class="nav-label">MANAGE</div><nav aria-label="Main navigation"><a class="nav-item {% if request.endpoint != 'bot_settings' %}active{% endif %}" href="{{ url_for('index') }}"><span>▦</span> Overview</a><a class="nav-item {% if request.endpoint == 'bot_settings' %}active{% endif %}" href="{{ url_for('bot_settings') }}"><span>↗</span> Telegram bot</a></nav>
+<div class="sidebar-bottom"><div class="security-dot"></div><strong>Admin workspace</strong><p>Private accounts.<br>One shared delivery bot.</p><form method="post" action="{{ url_for('logout') }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="text-button">Sign out ↗</button></form></div></aside>
+<main class="main"><header class="topbar"><span>Workspace <span class="slash">/</span> {% block breadcrumb %}Overview{% endblock %}</span><span class="admin-pill"><span class="dot"></span> Administrator</span></header>
+<div class="content">{% block content %}{% endblock %}</div><footer>MESSENGER LOGGER <span>Local message retention · 72 hours</span></footer></main></div></body></html>
