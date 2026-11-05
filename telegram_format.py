@@ -129,6 +129,12 @@ def attachment_card(item, media, index, zone, *, status=None):
     return result
 
 
+def download_caption(item, detail):
+    title = "🗑 Deleted message" if item["deleted"] else "💬 Message captured"
+    return (RichText().add(title, "bold").add("\n\n👤 ").add(item["sender"][:100], "bold")
+            .add("\n💬 ").add(item["conversation"][:100], "bold").add("\n\n" + detail))
+
+
 def event_card(conversation, body, kind):
     title = {"edit": "✏️ Message edited", "reaction": "💟 Reaction"}.get(kind, "💬 Chat update")
     return RichText().add(title, "bold").add("\n\n").add(conversation, "bold").add("\n\n").quote(body)

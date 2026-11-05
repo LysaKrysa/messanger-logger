@@ -129,13 +129,12 @@ class ContentModeTests(unittest.TestCase):
         self.assertEqual(rows[0]["original_text"], "original text")
         self.assertEqual(rows[0]["deleted_run_id"], "test-run-two")
 
-    def test_uncaptured_deleted_message_is_a_tombstone_not_invented_content(self):
+    def test_unattributed_deletion_waits_without_persisting_a_tombstone(self):
         self.store.accept(action("messageUnsend", mid="not-captured"))
         _, rows = load_messages(self.root / "messenger-modern.sqlite3", deleted_only=True)
-        self.assertEqual(len(rows), 1)
-        text = render_message(rows[0], ZoneInfo("Europe/Warsaw"))
-        self.assertIn("cannot be recovered", text)
-        self.assertEqual(self.store.counts(), {"unsend":1})
+        self.assertEqual(rows, [])
+        self.assertEqual(self.store.counts(), {})
+        self.assertEqual(len(self.store.pending_deletions), 1)
 
     def test_deletion_before_delayed_message_capture_preserves_flag(self):
         self.store.accept(action("messageUnsend"))

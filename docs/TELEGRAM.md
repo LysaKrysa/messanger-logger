@@ -50,10 +50,25 @@ Setting changes do not replay earlier failed notices.
 
 ## Delivery behavior
 
-Formatted notices include available names, conversation titles, timestamps,
-original/latest captured text, and attachment descriptions. Saved media uploads
-as documents. Oversized Telegram uploads remain local with a notice. Local
-attachment download limits are separate from Telegram's upload limit.
+Only incoming content is captured and forwarded. Messages sent by the logged-in
+account, including quoted copies of their text, are excluded. Deletions of unknown
+messages wait briefly for an incoming original instead of producing an unattributed
+notice.
+
+Each deletion is sent in **one Telegram message**, after pending downloads finish.
+The notice includes available names, conversation titles, timestamps, original/latest
+captured text, and attachment descriptions. One saved attachment is a document with
+the details in its caption. Multiple files or a long caption become one ZIP with
+the original files and a full `message.txt` transcript. Long text without media is
+one downloadable text file. This preserves full text without splitting a notice.
+Voice recordings and other documents have Telegram's native download/save controls.
+No public download link exposes the bot token or private media URLs.
+
+Failed downloads are described in the same notice. A combined ZIP or individual
+file over the Cloud Bot API's 50,000,000-byte limit stays local, with one explanatory
+notice. Local attachment download limits are separate from Telegram's upload limit.
+In `all` mode an incoming message and its later deletion are separate notifications;
+each notification still contains its own details and files together.
 
 Sends are claimed in a local ledger before the request. Ambiguous sends are not
 automatically retried, avoiding duplicates. Queue overflow and failed downloads

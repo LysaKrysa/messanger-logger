@@ -98,6 +98,11 @@ The importer preserves forwarding mode and the view-once forwarding preference.
 Managed workers otherwise use the dashboard defaults: encrypted transport,
 Europe/Warsaw time, 25 MB local media-download limit, and 512 MiB worker RAM.
 
+Every managed account captures incoming messages only. The account owner's own
+messages, media, and quoted text are excluded. Telegram deletion notices keep
+details and downloadable files together in one message; multiple attachments
+are delivered as one ZIP. Voice messages are downloadable documents.
+
 Existing topic mappings/device state are copied. Only newly observed events
 are captured after startup; installing/importing does not replay failed sends
 or earlier message history.

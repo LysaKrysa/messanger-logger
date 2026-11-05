@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — incoming-only capture and combined Telegram downloads
+
+- Exclude the logged-in account's regular/encrypted messages before storage or
+  media downloads, and remove quoted copies of its text from incoming records.
+- Restrict related actions to known incoming messages; briefly hold unattributed
+  deletions in memory for delayed originals. Read-only views hide legacy owner records.
+- Send each deletion as one notice: text, an original downloadable attachment with
+  a caption, or one ZIP containing multiple files and full message details.
+- Keep voice files downloadable, wait for pending media, preserve long text in a
+  transcript, and retain duplicate suppression and safe missing-topic repair.
+
 ## Unreleased — administrator workspace
 
 - Optional HTTPS admin dashboard for up to six separate Messenger accounts.

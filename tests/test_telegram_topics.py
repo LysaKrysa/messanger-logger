@@ -354,16 +354,18 @@ class TopicRelayTests(unittest.TestCase):
     def sends(self):
         return [json.loads(body) for request, body in self.calls if request.full_url.endswith("/sendMessage")]
 
-    def test_different_conversations_and_all_text_pages_go_to_their_own_topics(self):
+    def test_long_download_and_short_text_go_to_their_own_topics(self):
         first = message()
         first["data"]["text"] = "🙂" * 4000
         self.accept(first)
         self.accept(message("m2", thread=43))
         self.settle()
         topics = [item["message_thread_id"] for item in self.sends()]
-        self.assertGreater(len(topics), 2)
-        self.assertTrue(all(item == topics[0] for item in topics[:-1]))
-        self.assertNotEqual(topics[0], topics[-1])
+        self.assertEqual(len(topics), 1)
+        documents = [self.multipart_fields(request, body) for request, body in self.calls if request.full_url.endswith("/sendDocument")]
+        self.assertEqual(len(documents), 1)
+        self.assertNotEqual(int(documents[0]["message_thread_id"]), topics[0])
+        self.assertIn(first["data"]["text"].encode(), documents[0]["document"])
 
     def test_deletion_and_late_media_followup_reuse_original_topic(self):
         self.accept(message(attachments=[{"type": "image"}]))
@@ -377,7 +379,7 @@ class TopicRelayTests(unittest.TestCase):
         self.relay.media_updated("42", "m1")
         self.settle()
         texts = self.sends()
-        self.assertEqual([item["message_thread_id"] for item in texts], [101, 101])
+        self.assertEqual(texts, [])
         request, body = next((request, body) for request, body in self.calls if request.full_url.endswith("/sendDocument"))
         multipart = BytesParser(policy=default).parsebytes(("MIME-Version: 1.0\r\nContent-Type: " + request.get_header("Content-type") + "\r\n\r\n").encode() + body)
         fields = {part.get_param("name", header="content-disposition"): part.get_payload(decode=True) for part in multipart.iter_parts()}
@@ -437,9 +439,10 @@ class TopicRelayTests(unittest.TestCase):
         self.delivery_hook = hook
         event = message()
         event["data"]["text"] = "🙂 long literal text " * 600
-        self.accept(event)
-        self.settle()
-        expected = message_card(self.store.relay_snapshot("42", "m1"), self.relay.zone).text
+        self.store.accept(event)
+        card = message_card(self.store.relay_snapshot("42", "m1"), self.relay.zone)
+        self.relay._text(card, route=self.relay._route("42", "Friends"))
+        expected = card.text
         self.assertEqual("".join(item["text"] for item in accepted), expected)
         self.assertEqual(received[1]["text"], received[2]["text"])
         self.assertEqual([item["message_thread_id"] for item in received[:3]], [77, 77, 101])
@@ -476,8 +479,8 @@ class TopicRelayTests(unittest.TestCase):
         self.assertEqual([item["message_thread_id"] for item in fields], [b"77", b"101"])
         self.assertEqual([item["document"] for item in fields], [PNG, PNG])
         self.assertTrue(all(int(request.get_header("Content-length")) == len(body) for request, body in uploads))
-        self.assertEqual(len(self.sends()), 1)
-        self.assertEqual([row[0] for row in self.store.db.execute("SELECT status FROM telegram_attempts")], ["sent", "sent"])
+        self.assertEqual(self.sends(), [])
+        self.assertEqual([row[0] for row in self.store.db.execute("SELECT status FROM telegram_attempts")], ["sent"])
 
     def test_network_failure_does_not_change_mapping_or_resend(self):
         self.seed_stale_topic()

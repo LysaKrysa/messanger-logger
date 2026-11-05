@@ -85,16 +85,21 @@ class EventStore:
         if self.run_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", self.run_id):
             raise StoreFailure("Invalid run identifier.")
         self.lock = threading.RLock()
+        # Unattributed deletions wait briefly in memory for their incoming original.
+        # Never create a persistent tombstone that could belong to our own message.
+        self.pending_deletions = {}
         path = self.root / "messenger-modern.sqlite3"
         existed = path.is_file()
         self.db = sqlite3.connect(path, check_same_thread=False)
         path.chmod(0o600)
         has_settings = self.db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='settings'").fetchone()
-        if self.own_id and has_settings:
+        if has_settings:
             account = self.db.execute("SELECT value FROM settings WHERE key='account_id'").fetchone()
-            if account and account[0] != self.own_id:
+            if self.own_id and account and account[0] != self.own_id:
                 self.db.close()
                 raise StoreFailure("This log database belongs to another account. Use a separate DATA_DIR.")
+            if account and not self.own_id:
+                self.own_id = identifier(account[0])
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.execute("PRAGMA secure_delete=ON")
@@ -314,6 +319,48 @@ class EventStore:
         rows = self.db.execute("SELECT thread_id FROM messages WHERE message_id=? LIMIT 2", (message_id,)).fetchall()
         return rows[0][0] if len(rows) == 1 else ""
 
+    def _incoming(self, event, received):
+        if not self.own_id:
+            return True  # Legacy/offline stores without an authenticated identity.
+        data = event.get("data")
+        if not isinstance(data, dict):
+            return False
+        kind = EVENT_NAMES[event["type"]]
+        mid = identifier(data.get("id") if kind == "message" else data.get("messageId"))
+        tid = identifier(data.get("threadId") or data.get("chatJid") or data.get("chat")) or self._resolve_thread(mid) or "unresolved"
+        uid = identifier(data.get("senderId") or data.get("actorId") or data.get("readerId") or data.get("senderJid") or data.get("sender"))
+        for key, (seen, _) in list(self.pending_deletions.items()):
+            if seen < received - 120:
+                self.pending_deletions.pop(key, None)
+        if kind == "message":
+            if not uid or uid == self.own_id:
+                self.pending_deletions.pop((tid, mid), None)
+                self.pending_deletions.pop(("unresolved", mid), None)
+                return False
+            return True
+        previous = self.db.execute("SELECT sender_id FROM messages WHERE thread_id=? AND message_id=?", (tid, mid)).fetchone()
+        if previous and previous[0] and previous[0] != self.own_id:
+            return kind == "unsend" or uid != self.own_id
+        if kind == "unsend" and mid and previous is None:
+            pending = {"type": "messageUnsend", "timestamp": event.get("timestamp"), "data": {
+                "threadId": tid, "messageId": mid, "timestampMs": number(data.get("timestampMs") or event.get("timestamp")),
+            }}
+            self.pending_deletions.setdefault((tid, mid), (received, pending))
+            while len(self.pending_deletions) > 4096:
+                self.pending_deletions.pop(next(iter(self.pending_deletions)))
+        return False
+
+    def _safe_reply(self, reply, tid):
+        reply = dict(reply)
+        if self.own_id and reply:
+            cached = self.db.execute("SELECT sender_id FROM messages WHERE thread_id=? AND message_id=?", (tid, reply.get("message_id", ""))).fetchone()
+            author = (cached[0] if cached else None) or reply.get("sender_id")
+            if not author or author == self.own_id:
+                reply["text"] = ""
+            if author:
+                reply["sender_id"] = author
+        return reply
+
     def _normalize(self, event):
         source_type = event.get("type")
         kind = EVENT_NAMES.get(source_type)
@@ -350,7 +397,7 @@ class EventStore:
             normalized["metadata"] = {"mentions": mentions, "system_message": data.get("isAdminMsg") is True}
             if isinstance(data.get("replyTo"), dict):
                 reply = data["replyTo"]
-                normalized["reply"] = {"message_id": identifier(reply.get("messageId")), "sender_id": identifier(reply.get("senderId")), "text": text_value(reply.get("text"))}
+                normalized["reply"] = self._safe_reply({"message_id": identifier(reply.get("messageId")), "sender_id": identifier(reply.get("senderId")), "text": text_value(reply.get("text"))}, tid)
             title = text_value(data.get("threadName"))
             if title:
                 self.db.execute("INSERT INTO threads(id,name,type) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name", (tid, title, number(data.get("threadType"))))
@@ -383,7 +430,7 @@ class EventStore:
                 original = reply["text"]
                 if not original and reply["message_id"]:
                     row = self.db.execute("SELECT text,sender_id FROM messages WHERE thread_id=? AND message_id=? AND (?='' OR run_id=?)", (event["thread_id"], reply["message_id"], self.run_id, self.run_id)).fetchone()
-                    if row:
+                    if row and (not self.own_id or row[1] and row[1] != self.own_id):
                         original, cached_id = row
                         author = self._name(reply["sender_id"] or cached_id)
                 return f"{who} replied to <b>{esc(author)}</b>: <i>{esc(original or reply['message_id'])}</i>\n<b>Reply</b>: {body}"
@@ -423,6 +470,8 @@ class EventStore:
                 self._metadata(event.get("data") or {})
                 return None
             if event.get("type") not in EVENT_NAMES or not self._future_event(event):
+                return None
+            if not self._incoming(event, received):
                 return None
             with self.db:
                 value = self._normalize(event)
@@ -473,6 +522,15 @@ class EventStore:
                 summary = {"type": value["type"], "thread": self._thread_name(value["thread_id"]), "body": body,
                            "thread_id": value["thread_id"], "message_id": value["message_id"], "sender_id": value["sender_id"]}
             self._export_pending()
+            if value["type"] == "message":
+                pending = self.pending_deletions.pop((value["thread_id"], value["message_id"]), None)
+                if pending is None and self._resolve_thread(value["message_id"]) == value["thread_id"]:
+                    pending = self.pending_deletions.pop(("unresolved", value["message_id"]), None)
+                if pending:
+                    pending[1]["data"]["threadId"] = value["thread_id"]
+                    following = self.accept(pending[1], received=pending[0])
+                    if following:
+                        summary["following"] = following
             return summary
 
     def update_media(self, thread_id, message_id, index, result):
@@ -480,9 +538,9 @@ class EventStore:
         allowed = {"downloadStatus", "downloadError", "localPath", "savedBytes", "sha256"}
         safe = {key: value for key, value in result.items() if key in allowed}
         with self.lock, self.db:
-            row = self.db.execute("SELECT attachments,captured_at FROM messages WHERE thread_id=? AND message_id=? AND run_id=?",
+            row = self.db.execute("SELECT attachments,captured_at,sender_id FROM messages WHERE thread_id=? AND message_id=? AND run_id=?",
                                   (thread_id, message_id, self.run_id)).fetchone()
-            if row is None:
+            if row is None or self.own_id and (not row[2] or row[2] == self.own_id):
                 return False
             if self.retention_seconds is not None and row[1] <= self.clock() - self.retention_seconds:
                 return False
@@ -496,8 +554,8 @@ class EventStore:
 
     def media_available(self, thread_id, message_id):
         with self.lock:
-            row = self.db.execute("SELECT captured_at FROM messages WHERE thread_id=? AND message_id=? AND run_id=?", (thread_id, message_id, self.run_id)).fetchone()
-            return row is not None and (self.retention_seconds is None or row[0] > self.clock() - self.retention_seconds)
+            row = self.db.execute("SELECT captured_at,sender_id FROM messages WHERE thread_id=? AND message_id=? AND run_id=?", (thread_id, message_id, self.run_id)).fetchone()
+            return row is not None and (not self.own_id or bool(row[1]) and row[1] != self.own_id) and (self.retention_seconds is None or row[0] > self.clock() - self.retention_seconds)
 
     def cleanup_expired(self):
         if self.retention_seconds is None:
@@ -515,6 +573,8 @@ class EventStore:
             if row is None:
                 return None
             item = dict(zip(columns, row))
+            if self.own_id and (not item["sender_id"] or item["sender_id"] == self.own_id):
+                return None
             if self.retention_seconds is not None:
                 birth = item["captured_at"] or item["created_ms"] / 1000 or (item["deleted_at_ms"] or 0) / 1000
                 if birth <= self.clock() - self.retention_seconds:
@@ -522,7 +582,7 @@ class EventStore:
             item["sender"] = self._name(item["sender_id"])
             item["conversation"] = self._thread_name(thread_id)
             item["attachments"] = json.loads(item["attachments"])
-            item["reply"] = json.loads(item.pop("reply_json"))
+            item["reply"] = self._safe_reply(json.loads(item.pop("reply_json")), thread_id)
             if item["reply"]:
                 item["reply"]["sender_name"] = self._name(item["reply"].get("sender_id"))
             item["metadata"] = json.loads(item.pop("metadata_json"))

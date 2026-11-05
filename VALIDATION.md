@@ -1,5 +1,17 @@
 # Validation
 
+## Incoming-only capture and single-notice downloads
+
+- Authenticated sender admission excludes outgoing regular/encrypted messages,
+  attachments, owner actions, and quoted owner text before content persistence.
+- Synthetic runtime tests verify incoming-only counters, dispatch, out-of-order
+  deletion attribution, and legacy owner-record isolation in views and media.
+- Telegram tests check exact voice/document bytes, one-message multipart captions,
+  pending download completion, safe ZIP members, full long-text transcripts,
+  combined upload limits, ambiguous-send suppression, and topic-repair rewinds.
+- Tests use synthetic accounts and mocked network requests; no Facebook login
+  or real Telegram send is performed. Native transport inputs are unchanged.
+
 ## Optional administrator workspace
 
 - 172 standalone tests pass, including the pinned native offline RPC test and

@@ -24,7 +24,7 @@ dashboard manages a small shared workspace with one Telegram bot.
 
 | Feature | Behavior |
 | :--- | :--- |
-| **Live capture** | Incoming/outgoing text, attachments, replies, mentions, edits, reactions, and observed unsends. |
+| **Incoming capture** | Other people's text, attachments, replies, mentions, edits, reactions, and observed unsends. Messages sent by the logged-in account are excluded. |
 | **Regular + encrypted chats** | A pinned native bridge handles both transports. |
 | **Downloaded media** | Save supported images, video, GIFs, stickers, audio, voice messages, and files locally. |
 | **Deleted-message view** | Inspect content captured before a deletion, including original text and the latest captured edit. |
@@ -468,8 +468,28 @@ forwarding; existing Telegram messages are not reorganized.
 | `TELEGRAM_VIEW_ONCE=true` | Separately opt in to immediate view-once copies |
 
 Notices use formatted text, resolved names, timestamps, and attachment captions.
-Document uploads preserve the saved bytes. Ambiguous sends are not automatically
-retried, avoiding duplicate delivery.
+Each deleted message produces **one Telegram notice**:
+
+| Captured content | Telegram delivery |
+| :--- | :--- |
+| Text and metadata | One formatted message |
+| One attachment, including a voice message | Original file with the message details in its caption |
+| Multiple attachments or long text with a file | One ZIP containing the original files and `message.txt` |
+| Text longer than one Telegram message | One downloadable `message.txt` |
+
+Telegram documents include its native **download/save controls**; voice recordings
+are sent as downloadable files. The relay waits for pending local downloads before
+posting the notice. Failed downloads are described in that same notice. If the
+combined file exceeds Telegram's upload limit, one notice explains that the files
+remain local. Document uploads preserve the saved bytes. Ambiguous sends are not
+automatically retried, avoiding duplicate delivery.
+
+Capture excludes the logged-in account's messages and quoted copies of its text.
+Edits, reactions, and deletions must relate to a known incoming message. A deletion
+that arrives before its original waits briefly in memory for attribution. Existing
+owner records are hidden from the message views and forwarding; older archive files
+continue through the normal 72-hour expiry. In `all` mode, capture and a later
+deletion remain separate events, with one notification for each.
 
 ### Check Threaded mode
 

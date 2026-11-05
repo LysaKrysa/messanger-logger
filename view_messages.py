@@ -28,6 +28,11 @@ def load_messages(database: Path, *, deleted_only=False, run="latest", limit=50)
             scope = latest[0]
         conditions = []
         params = []
+        own = db.execute("SELECT value FROM settings WHERE key='account_id'").fetchone()
+        own_id = own[0] if own else ""
+        if own_id:
+            conditions.append("COALESCE(m.sender_id,'') NOT IN ('',?)")
+            params.append(own_id)
         if deleted_only:
             conditions.append("m.deleted=1")
         if scope != "all":
@@ -47,8 +52,6 @@ def load_messages(database: Path, *, deleted_only=False, run="latest", limit=50)
             + where + " ORDER BY COALESCE(m.deleted_at_ms,NULLIF(m.created_ms,0),m.captured_at*1000) DESC,m.rowid DESC LIMIT ?",
             params,
         ).fetchall()
-        own = db.execute("SELECT value FROM settings WHERE key='account_id'").fetchone()
-        own_id = own[0] if own else ""
         records = []
         for row in rows:
             item = dict(row)
@@ -58,6 +61,11 @@ def load_messages(database: Path, *, deleted_only=False, run="latest", limit=50)
             item["conversation"] = display_label(title) or (display_name(peer_name, peer_username) if display_label(peer_name) or peer_username else "Unnamed conversation")
             item["attachments"] = json.loads(item["attachments"] or "[]")
             item["reply"] = json.loads(item.pop("reply_json") or "{}")
+            if own_id and item["reply"]:
+                cached = db.execute("SELECT sender_id FROM messages WHERE thread_id=? AND message_id=?", (item["thread_id"], item["reply"].get("message_id", ""))).fetchone()
+                author = (cached[0] if cached else None) or item["reply"].get("sender_id")
+                if not author or author == own_id:
+                    item["reply"]["text"] = ""
             item["metadata"] = json.loads(item.pop("metadata_json") or "{}")
             reply_id = item["reply"].get("sender_id")
             if reply_id:

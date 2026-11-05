@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import io
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
@@ -56,7 +58,7 @@ class TelegramTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=ROOT)
         self.root = Path(self.temp.name)
-        self.store = EventStore(self.root, started_at=1000, run_id="telegram-run")
+        self.store = EventStore(self.root, own_id="12345", started_at=1000, run_id="telegram-run")
         self.store.accept({"type": "metadata", "data": {"contacts": [{"id": 222, "name": "Alex", "username": "alex.user"}], "threads": [{"id": 42, "name": "Conversation"}]}})
         self.env = patch.dict(os.environ, {"TELEGRAM_ENABLED": "true", "TELEGRAM_MODE": "deleted", "TELEGRAM_SEND_MEDIA": "true", "TELEGRAM_VIEW_ONCE": "false", "TELEGRAM_TOPICS": "false", "TELEGRAM_BOT_TOKEN": TOKEN, "TELEGRAM_CHAT_ID": "123456"})
         self.env.start()
@@ -96,12 +98,107 @@ class TelegramTests(unittest.TestCase):
     def texts(self):
         return [json.loads(body)["text"] for request, body in self.calls if request.full_url.endswith("/sendMessage")]
 
-    def save_media(self, mid="m1", index=0, data=PNG):
-        relative = Path("media") / "telegram-run" / (mid + ".png")
+    def save_media(self, mid="m1", index=0, data=PNG, filename=None):
+        relative = Path("media") / "telegram-run" / (filename or (mid + ("_" + str(index) if index else "") + ".png"))
         target = self.root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         self.store.update_media("42", mid, index, {"downloadStatus": "saved", "localPath": relative.as_posix(), "savedBytes": len(data), "sha256": hashlib.sha256(data).hexdigest()})
+
+    def document_fields(self):
+        from email.parser import BytesParser
+        from email.policy import default
+        self.assertEqual(len(self.calls), 1)
+        request, body = self.calls[0]
+        self.assertTrue(request.full_url.endswith("/sendDocument"))
+        self.assertEqual(int(request.get_header("Content-length")), len(body))
+        multipart = BytesParser(policy=default).parsebytes(("MIME-Version: 1.0\r\nContent-Type: " + request.get_header("Content-type") + "\r\n\r\n").encode() + body)
+        return {part.get_param("name", header="content-disposition"): part.get_payload(decode=True) for part in multipart.iter_parts()}
+
+    def test_voice_download_has_original_bytes_and_deletion_details_in_one_message(self):
+        voice = b"OggSsynthetic-voice-recording"
+        self.accept(message(attachments=[{"type": "voice", "fileName": "recording.ogg"}]))
+        self.save_media(data=voice, filename="recording.ogg")
+        self.accept(deletion())
+        self.settle()
+        fields = self.document_fields()
+        self.assertEqual(fields["document"], voice)
+        self.assertIn(b"Deleted message", fields["caption"])
+        self.assertIn(b"original <literal> & text", fields["caption"])
+        self.assertIn(b'filename="recording.ogg"', self.calls[0][1])
+
+    def test_multiple_files_wait_for_all_downloads_then_send_one_safe_zip(self):
+        self.accept(message(attachments=[{"type": "image", "url": "https://fbcdn.net/PRIVATE_URL"}, {"type": "voice"}]))
+        self.accept(deletion())
+        self.save_media()
+        self.relay.media_updated("42", "m1")
+        self.settle()
+        self.assertEqual(self.calls, [])
+        voice = b"OggSsynthetic-voice"
+        self.save_media(index=1, data=voice, filename='voice"\r\n.ogg')
+        self.relay.media_updated("42", "m1")
+        self.settle()
+        fields = self.document_fields()
+        with zipfile.ZipFile(io.BytesIO(fields["document"])) as archive:
+            self.assertEqual(archive.read("message.txt").decode().count("Deleted message"), 1)
+            self.assertEqual(archive.read("01_m1.png"), PNG)
+            self.assertEqual(archive.read("02_voice___.ogg"), voice)
+            self.assertTrue(all("/" not in name and "\\" not in name for name in archive.namelist()))
+            self.assertNotIn("PRIVATE_URL", archive.read("message.txt").decode())
+        self.assertEqual(list(self.root.glob("*.zip")), [])
+        for _ in range(3):
+            self.relay.media_updated("42", "m1")
+        self.settle()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_long_deleted_text_is_one_complete_downloadable_transcript(self):
+        event = message()
+        original = "🙂<literal> & " * 1000
+        event["data"]["text"] = original
+        self.accept(event)
+        self.accept(deletion())
+        self.settle()
+        fields = self.document_fields()
+        self.assertIn(original.encode(), fields["document"])
+        self.assertIn(b'filename="message.txt"', self.calls[0][1])
+        self.assertLessEqual(units(fields["caption"].decode()), 900)
+
+    def test_long_details_and_one_file_share_one_zip_without_truncation(self):
+        event = message(attachments=[{"type": "image"}])
+        event["data"]["text"] = "🙂" * 600
+        self.accept(event)
+        self.save_media()
+        self.accept(deletion())
+        self.settle()
+        fields = self.document_fields()
+        with zipfile.ZipFile(io.BytesIO(fields["document"])) as archive:
+            self.assertIn(event["data"]["text"], archive.read("message.txt").decode())
+            self.assertEqual(archive.read("01_m1.png"), PNG)
+
+    def test_combined_upload_limit_produces_one_notice_and_keeps_both_local_files(self):
+        self.accept(message(attachments=[{"type": "file"}, {"type": "file"}]))
+        self.save_media(data=b"a" * 1300)
+        self.save_media(index=1, data=b"b" * 1300)
+        with patch("telegram_relay.MAX_UPLOAD_BYTES", 2000):
+            self.accept(deletion())
+            self.settle()
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn("combined download exceeds", self.texts()[0])
+        self.assertTrue((self.root / "media/telegram-run/m1.png").is_file())
+        self.assertTrue((self.root / "media/telegram-run/m1_1.png").is_file())
+
+    def test_ambiguous_file_upload_is_not_retried_on_later_media_callbacks(self):
+        self.accept(message(attachments=[{"type": "image"}]))
+        self.save_media()
+        self.network_error = TimeoutError("SYNTHETIC_PRIVATE_DETAILS")
+        self.accept(deletion())
+        self.settle()
+        self.network_error = None
+        self.relay.media_updated("42", "m1")
+        self.settle()
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self.store.db.execute("SELECT status FROM telegram_attempts").fetchone()[0], "failed")
+        self.assertNotIn("SYNTHETIC_PRIVATE_DETAILS", " ".join(self.reports))
 
     def test_deleted_mode_sends_captured_text_names_times_and_edit(self):
         self.accept(message())
@@ -124,8 +221,8 @@ class TelegramTests(unittest.TestCase):
         for _ in range(3):
             self.relay.media_updated("42", "m1")
         self.settle()
-        self.assertEqual(len(self.calls), 2)
-        self.assertEqual([row[0] for row in self.store.db.execute("SELECT status FROM telegram_attempts")], ["sent", "sent"])
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual([row[0] for row in self.store.db.execute("SELECT status FROM telegram_attempts")], ["sent"])
 
     def test_saved_media_is_uploaded_as_exact_file_bytes(self):
         self.accept(message(attachments=[{"type": "image", "fileName": "photo.png", "url": "https://fbcdn.net/PRIVATE_SIGNED_URL"}]))
@@ -145,14 +242,13 @@ class TelegramTests(unittest.TestCase):
         self.accept(message(attachments=[{"type": "image"}]))
         self.accept(deletion())
         self.settle()
-        self.assertEqual(len(self.calls), 1)
-        self.assertIn("Downloading…", self.texts()[0])
+        self.assertEqual(self.calls, [])
         self.save_media()
         self.relay.media_updated("42", "m1")
         self.settle()
-        self.assertEqual(len(self.calls), 2)
-        self.assertEqual(len(self.texts()), 1)
-        self.assertTrue(self.calls[1][0].full_url.endswith("/sendDocument"))
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.texts(), [])
+        self.assertTrue(self.calls[0][0].full_url.endswith("/sendDocument"))
 
     def test_media_saver_callback_reaches_deleted_relay(self):
         import base64
@@ -172,24 +268,24 @@ class TelegramTests(unittest.TestCase):
                 time.sleep(0.01)
             self.assertEqual(saver.saved, 1)
             self.settle()
-            self.assertEqual(len(self.calls), 2)
+            self.assertEqual(len(self.calls), 1)
         finally:
             saver.close()
 
-    def test_unknown_deleted_message_has_explicit_unavailable_notice(self):
+    def test_unknown_deleted_message_does_not_forward_unattributed_content(self):
         self.accept(deletion("not-captured"))
         self.settle()
-        self.assertIn("cannot be recovered", self.texts()[0])
+        self.assertEqual(self.calls, [])
 
-    def test_late_capture_can_follow_an_unavailable_notice(self):
+    def test_delayed_incoming_original_produces_one_complete_deletion_notice(self):
         self.relay.send_media = False
         self.accept(deletion())
         self.settle()
         self.accept(message())
         self.settle()
-        self.assertEqual(len(self.texts()), 2)
-        self.assertIn("cannot be recovered", self.texts()[0])
-        self.assertIn("original <literal>", self.texts()[1])
+        self.assertEqual(len(self.texts()), 1)
+        self.assertIn("Deleted message", self.texts()[0])
+        self.assertIn("original <literal>", self.texts()[0])
 
     def test_enabling_relay_does_not_scan_previous_deletions(self):
         self.store.accept(message())
@@ -368,8 +464,8 @@ class TelegramTests(unittest.TestCase):
         self.store.update_media("42", "m1", 0, {"downloadStatus": "saved", "localPath": "media/large.bin", "savedBytes": 50_000_001, "sha256": "hash"})
         self.accept(deletion())
         self.settle()
-        self.assertEqual(len(self.texts()), 2)
-        self.assertIn("exceeds Telegram", self.texts()[1])
+        self.assertEqual(len(self.texts()), 1)
+        self.assertIn("local", self.texts()[0])
         self.assertFalse(any(request.full_url.endswith("/sendDocument") for request, _ in self.calls))
 
     def test_modified_media_is_not_uploaded(self):
@@ -379,7 +475,8 @@ class TelegramTests(unittest.TestCase):
         self.accept(deletion())
         self.settle()
         self.assertEqual(len(self.calls), 1)
-        self.assertIn("failed", [row[0] for row in self.store.db.execute("SELECT status FROM telegram_attempts")])
+        self.assertIn("integrity check", self.texts()[0])
+        self.assertEqual([row[0] for row in self.store.db.execute("SELECT status FROM telegram_attempts")], ["sent"])
 
     def test_external_path_is_not_uploaded(self):
         outside = self.root / "private-state"
@@ -389,15 +486,15 @@ class TelegramTests(unittest.TestCase):
             self.relay._document(media, "caption")
         self.assertEqual(self.calls, [])
 
-    def test_failed_media_has_followup_status_without_resending_original(self):
+    def test_failed_media_is_reported_in_one_complete_notice(self):
         self.accept(message(attachments=[{"type": "image"}]))
         self.accept(deletion())
         self.settle()
         self.store.update_media("42", "m1", 0, {"downloadStatus": "failed", "downloadError": "download_failed"})
         self.relay.media_updated("42", "m1")
         self.settle()
-        self.assertEqual(len(self.texts()), 2)
-        self.assertIn("Local download: failed", self.texts()[1])
+        self.assertEqual(len(self.texts()), 1)
+        self.assertIn("Unavailable", self.texts()[0])
 
     def test_long_unicode_text_is_split_without_losing_characters(self):
         text = "🙂" * 4000 + "abc"
@@ -474,18 +571,17 @@ class TelegramTests(unittest.TestCase):
         self.relay.view_once = True
         self.accept(message(attachments=[{"type": "image", "viewOnce": True, "viewMode": "once"}]))
         self.settle()
-        self.assertEqual(len(self.texts()), 1)
-        self.assertIn("View-once message", self.texts()[0])
-        self.assertNotIn("Deleted message", self.texts()[0])
+        self.assertEqual(self.calls, [])
         self.save_media()
         self.relay.media_updated("42", "m1")
         self.settle()
-        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(len(self.calls), 1)
+        self.assertIn(b"View-once message", self.calls[0][1])
         self.accept(deletion())
         self.settle()
-        self.assertEqual(len(self.texts()), 2)
-        self.assertIn("Deleted message", self.texts()[1])
-        self.assertEqual(sum(request.full_url.endswith("/sendDocument") for request, _ in self.calls), 1)
+        self.assertEqual(self.texts(), [])
+        self.assertIn(b"Deleted message", self.calls[1][1])
+        self.assertEqual(sum(request.full_url.endswith("/sendDocument") for request, _ in self.calls), 2)
 
     def test_view_once_does_not_expand_deleted_only_routing_without_opt_in(self):
         self.accept(message(attachments=[{"type": "image", "viewOnce": True, "viewMode": "once"}]))
@@ -504,7 +600,8 @@ class TelegramTests(unittest.TestCase):
         fields = {part.get_param("name", header="content-disposition"): part.get_payload(decode=True) for part in message_body.iter_parts()}
         caption = fields["caption"].decode()
         entities = json.loads(fields["caption_entities"])
-        self.assertIn("Deleted attachment", caption)
+        self.assertIn("Deleted message", caption)
+        self.assertIn("original <literal> & text", caption)
         self.assertIn("Alex (@alex.user)", caption)
         self.assertNotIn("/data/", caption)
         self.assertTrue(entities)
