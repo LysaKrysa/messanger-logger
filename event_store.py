@@ -562,12 +562,25 @@ class EventStore:
                                      (bot_id, chat_id, thread_id, name, int(is_fallback)))
             return cursor.rowcount == 1
 
-    def save_telegram_topic(self, bot_id, chat_id, thread_id, topic_id, name, is_fallback=False):
+    def save_telegram_topic(self, bot_id, chat_id, thread_id, topic_id, name, is_fallback=False, *, status="ready"):
         if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id <= 0:
             raise StoreFailure("Invalid Telegram topic identifier.")
+        if status not in {"ready", "repair_pending"}:
+            raise StoreFailure("Invalid Telegram topic state.")
         with self.lock, self.db:
-            self.db.execute("INSERT INTO telegram_topics VALUES (?,?,?,?,?,'ready',?) ON CONFLICT(bot_id,chat_id,thread_id) DO UPDATE SET topic_id=excluded.topic_id,name=excluded.name,status='ready',is_fallback=excluded.is_fallback",
-                            (bot_id, chat_id, thread_id, topic_id, name, int(is_fallback)))
+            self.db.execute("INSERT INTO telegram_topics VALUES (?,?,?,?,?,?,?) ON CONFLICT(bot_id,chat_id,thread_id) DO UPDATE SET topic_id=excluded.topic_id,name=excluded.name,status=excluded.status,is_fallback=excluded.is_fallback",
+                            (bot_id, chat_id, thread_id, topic_id, name, status, int(is_fallback)))
+
+    def begin_telegram_topic_repair(self, bot_id, chat_id, thread_id, topic_id):
+        with self.lock, self.db:
+            cursor = self.db.execute("UPDATE telegram_topics SET topic_id=NULL,status='creating' WHERE bot_id=? AND chat_id=? AND thread_id=? AND topic_id=? AND status='ready'",
+                                     (bot_id, chat_id, thread_id, topic_id))
+            return cursor.rowcount == 1
+
+    def finish_telegram_topic_repair(self, bot_id, chat_id, thread_id, topic_id, *, missing=False):
+        with self.lock, self.db:
+            self.db.execute("UPDATE telegram_topics SET status=? WHERE bot_id=? AND chat_id=? AND thread_id=? AND topic_id=? AND status='repair_pending'",
+                            ("missing" if missing else "ready", bot_id, chat_id, thread_id, topic_id))
 
     def cancel_telegram_topic(self, bot_id, chat_id, thread_id):
         with self.lock, self.db:

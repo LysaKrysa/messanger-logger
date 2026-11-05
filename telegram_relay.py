@@ -1,4 +1,4 @@
-"""Optional Telegram copies of observed deletions; no archive scans or retries."""
+"""Optional Telegram copies; no archive scans or retries of ambiguous sends."""
 from __future__ import annotations
 
 import hashlib
@@ -74,7 +74,8 @@ class TelegramAPIRejected(TelegramRejected):
     """A definite rejection, compatible with the topic creation safety checks."""
     def __init__(self, method, code, payload=None):
         super().__init__(code)
-        self.details = _request_details(method, code, _rejection_reason(code, payload))
+        self.reason = _rejection_reason(code, payload)
+        self.details = _request_details(method, code, self.reason)
 
 
 class TelegramRequestError(RuntimeError):
@@ -234,7 +235,32 @@ class TelegramRelay:
     def _destination_chat(self):
         return self.topics.chat_id if self.topics is not None and self.topics.chat_id is not None else self.chat
 
-    def _text(self, text, *, topic_id=None):
+    def _route(self, thread_id, title):
+        if self.topics is None:
+            return None
+        return {"thread_id": thread_id, "title": title, "topic_id": self._topic(thread_id, title)}
+
+    def _send_in_topic(self, action, *, topic_id=None, route=None):
+        if route is None:
+            return action(topic_id)
+        try:
+            result = action(route["topic_id"])
+        except TelegramAPIRejected as exc:
+            if exc.code != 400 or exc.reason != "topic_missing":
+                raise
+            route["topic_id"] = self.topics.replace_missing(route["thread_id"], route["topic_id"], route["title"])
+            self.report("Telegram missing topic replaced; retrying only the rejected request once.")
+            try:
+                result = action(route["topic_id"])
+            except TelegramAPIRejected as retry:
+                if retry.code == 400 and retry.reason == "topic_missing":
+                    self.topics.confirm(route["thread_id"], route["topic_id"], missing=True)
+                    self.report("Telegram rejected the replacement topic; automatic repair paused. Use manage-topics to bind a verified existing topic.")
+                raise
+        self.topics.confirm(route["thread_id"], route["topic_id"])
+        return result
+
+    def _text(self, text, *, topic_id=None, route=None):
         rich = text if isinstance(text, RichText) else RichText().add(text)
         for part, entities in rich.pages():
             if self.stopping.is_set():
@@ -243,9 +269,11 @@ class TelegramRelay:
                 "chat_id": self._destination_chat(), "text": part, "entities": entities, "disable_notification": True,
                 "link_preview_options": {"is_disabled": True},
             }
-            if topic_id is not None:
-                payload["message_thread_id"] = topic_id
-            self._post("sendMessage", json.dumps(payload).encode())
+            def send(current_topic):
+                if current_topic is not None:
+                    payload["message_thread_id"] = current_topic
+                return self._post("sendMessage", json.dumps(payload).encode())
+            self._send_in_topic(send, topic_id=topic_id, route=route)
 
     def _attempt(self, tid, mid, part, action):
         if self.stopping.is_set() or not self.store.claim_telegram(tid, mid, part):
@@ -260,10 +288,13 @@ class TelegramRelay:
             self.report("Telegram notification sent.")
 
     def _report_failure(self, exc):
+        if isinstance(exc, TopicError):
+            self.report("Telegram topics: " + str(exc) + " Local content remains saved.")
+            return
         self.report("Telegram relay failed (" + _failure_details(exc) +
                     "); captured content remains local. No automatic resend.")
 
-    def _document(self, media, caption, *, topic_id=None):
+    def _document(self, media, caption, *, topic_id=None, route=None):
         relative = Path(media["localPath"])
         root = self.store.root / "media"
         target = self.store.root / relative
@@ -279,28 +310,33 @@ class TelegramRelay:
                 digest.update(block)
             if digest.hexdigest() != media.get("sha256"):
                 raise ValueError("Saved file integrity check failed.")
-            handle.seek(0)
             boundary = "messenger-" + secrets.token_hex(16)
             rich = caption if isinstance(caption, RichText) else RichText().add(caption)
             caption_text, caption_entities = next(rich.pages(900), ("Attachment", []))
-            fields = {"chat_id": self._destination_chat(), "caption": caption_text, "caption_entities": json.dumps(caption_entities), "disable_notification": "true"}
-            if topic_id is not None:
-                fields["message_thread_id"] = str(topic_id)
-            prefix = b""
-            for key, value in fields.items():
-                prefix += ("--" + boundary + '\r\nContent-Disposition: form-data; name="' + key + '"\r\n\r\n' + value + "\r\n").encode()
             filename = re.sub(r'[^A-Za-z0-9._-]', "_", target.name)[:150] or "attachment.bin"
-            prefix += ("--" + boundary + '\r\nContent-Disposition: form-data; name="document"; filename="' + filename + '"\r\nContent-Type: application/octet-stream\r\n\r\n').encode()
             suffix = ("\r\n--" + boundary + "--\r\n").encode()
-            def body():
-                yield prefix
-                while block := handle.read(65536):
-                    if self.stopping.is_set():
-                        raise InterruptedError
-                    yield block
-                yield suffix
-            self._post("sendDocument", body(), "multipart/form-data; boundary=" + boundary,
-                       length=len(prefix) + info.st_size + len(suffix))
+            def send(current_topic):
+                # A definitive rejection can consume the entire first upload.
+                # Rebuild fields and rewind only for the one permitted retry.
+                handle.seek(0)
+                fields = {"chat_id": self._destination_chat(), "caption": caption_text,
+                          "caption_entities": json.dumps(caption_entities), "disable_notification": "true"}
+                if current_topic is not None:
+                    fields["message_thread_id"] = str(current_topic)
+                prefix = b""
+                for key, value in fields.items():
+                    prefix += ("--" + boundary + '\r\nContent-Disposition: form-data; name="' + key + '"\r\n\r\n' + value + "\r\n").encode()
+                prefix += ("--" + boundary + '\r\nContent-Disposition: form-data; name="document"; filename="' + filename + '"\r\nContent-Type: application/octet-stream\r\n\r\n').encode()
+                def body():
+                    yield prefix
+                    while block := handle.read(65536):
+                        if self.stopping.is_set():
+                            raise InterruptedError
+                        yield block
+                    yield suffix
+                return self._post("sendDocument", body(), "multipart/form-data; boundary=" + boundary,
+                                  length=len(prefix) + info.st_size + len(suffix))
+            self._send_in_topic(send, topic_id=topic_id, route=route)
 
     def _deleted(self, tid, mid):
         snapshot = self.store.relay_snapshot(tid, mid)
@@ -311,14 +347,14 @@ class TelegramRelay:
             snapshot = self.store.relay_snapshot(tid, mid)
             if not snapshot or not self._eligible(snapshot):
                 return
-        topic_id = self._topic(tid, snapshot["conversation"])
+        route = self._route(tid, snapshot["conversation"])
         # Send the text immediately, then follow up when pending downloads finish.
         notice = dict(snapshot)
         notice["attachments"] = [{key: value for key, value in item.items() if key not in {"url", "previewUrl", "localPath"}}
                                  for item in snapshot["attachments"]]
         phase = "deleted" if snapshot["deleted"] else "message"
         text_part = "text:" + phase + (":captured" if snapshot["original_text"] is not None else ":unavailable")
-        self._attempt(tid, mid, text_part, lambda: self._text(message_card(notice, self.zone), topic_id=topic_id))
+        self._attempt(tid, mid, text_part, lambda: self._text(message_card(notice, self.zone), route=route))
         if not self.send_media:
             return
         for index, media in enumerate(snapshot["attachments"]):
@@ -327,12 +363,12 @@ class TelegramRelay:
             if status == "saved" and media.get("localPath"):
                 part = "media:" + str(index) + ":" + str(media.get("sha256", ""))
                 if media.get("savedBytes", 0) > MAX_UPLOAD_BYTES:
-                    self._attempt(tid, mid, part, lambda title=title: self._text(title.add("\n\nSaved locally; exceeds Telegram's file-upload limit.", "italic"), topic_id=topic_id))
+                    self._attempt(tid, mid, part, lambda title=title: self._text(title.add("\n\nSaved locally; exceeds Telegram's file-upload limit.", "italic"), route=route))
                 else:
-                    self._attempt(tid, mid, part, lambda media=media, title=title: self._document(media, title, topic_id=topic_id))
+                    self._attempt(tid, mid, part, lambda media=media, title=title: self._document(media, title, route=route))
             elif status in {"failed", "interrupted"}:
                 self._attempt(tid, mid, "media-status:" + str(index) + ":" + status,
-                              lambda title=title, status=status: self._text(title.add("\n\nLocal download: " + status + ". Captured metadata is retained.", "italic"), topic_id=topic_id))
+                              lambda title=title, status=status: self._text(title.add("\n\nLocal download: " + status + ". Captured metadata is retained.", "italic"), route=route))
 
     def _work(self):
         while not self.stopping.is_set():
@@ -348,8 +384,8 @@ class TelegramRelay:
                     self._deleted(*item)
                 else:
                     plain = html.unescape(re.sub(r"<[^>]+>", "", item["body"]))
-                    topic_id = self._topic(item["thread_id"], item["thread"])
-                    self._text(event_card(item["thread"], plain, item["type"]), topic_id=topic_id)
+                    route = self._route(item["thread_id"], item["thread"])
+                    self._text(event_card(item["thread"], plain, item["type"]), route=route)
             except TopicError as exc:
                 self.report("Telegram topics: " + str(exc) + " Local content remains saved.")
             except Exception as exc:
