@@ -140,7 +140,13 @@ class LoggerRuntime:
                     self.report("Transport reconnected. Messages missed while disconnected are not guaranteed to replay.")
                 else:
                     summary = self.store.accept(event)
+                    accepted = []
                     if summary is not None:
+                        following = summary.pop("following", None)
+                        accepted.append((event, summary))
+                        if following is not None:
+                            accepted.append(({"type": "messageUnsend", "data": {}}, following))
+                    for source, summary in accepted:
                         self.logged_this_run += 1
                         if summary["type"] == "message":
                             self.messages_this_run += 1
@@ -149,7 +155,7 @@ class LoggerRuntime:
                         elif summary["type"] == "unsend":
                             self.deleted_this_run += 1
                         self.relay.submit(summary)
-                        self.media.submit(event, summary)
+                        self.media.submit(source, summary)
                         self.names.submit(summary.get("sender_id"))
                 self.bridge.events.task_done()
         except Exception:
@@ -179,7 +185,7 @@ class LoggerRuntime:
         with self._report_lock:
             cleanup_status(self.root, time.time() - RETENTION_SECONDS, self.zone)
         self.report("Local message retention is 72 hours; cleanup runs every five minutes. Telegram copies are kept.")
-        self.report("Chat-content capture starts at process startup; counters are zero for this run.")
+        self.report("Incoming chat-content capture starts at process startup; messages sent by this account are excluded. Counters are zero for this run.")
         if isinstance(user.get("name"), str):
             self.store.accept({"type": "metadata", "data": {"contacts": [{"id": expected_id, "name": user["name"]}]}})
         self.names = ContactNames(self.bridge, self.store, self.stop)
@@ -193,7 +199,7 @@ class LoggerRuntime:
             self.report("Connecting encrypted Messenger transport...")
             self.bridge.call("connectE2EE", timeout=180)
             self.bridge.wait_connected(encrypted=True, timeout=120, stop_event=self.stop)
-            self.report("Messenger listener ready (regular and encrypted). Send a fresh test message.")
+            self.report("Messenger listener ready (regular and encrypted). Ask another person to send a fresh test message.")
         else:
             self.report("Messenger listener ready for unencrypted chats only; encrypted transport is disabled in configuration.")
         self.media.start()

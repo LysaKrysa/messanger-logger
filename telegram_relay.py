@@ -1,6 +1,7 @@
 """Optional Telegram copies; no archive scans or retries of ambiguous sends."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import html
 import json
@@ -12,14 +13,16 @@ import secrets
 import socket
 import ssl
 import stat
+import tempfile
 import threading
 import time
+import zipfile
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from telegram_format import RichText, chunks, message_card, attachment_card, event_card
+from telegram_format import RichText, chunks, message_card, download_caption, event_card
 from telegram_topics import TopicRouter, TopicError, TelegramRejected
 
 # Cloud Bot API multipart uploads: https://core.telegram.org/bots/api#sending-files
@@ -30,6 +33,11 @@ API_METHODS = frozenset({"getMe", "getChat", "getChatMember", "createForumTopic"
 
 
 class TelegramConfigurationError(ValueError):
+    pass
+
+
+class AttachmentUnavailable(ValueError):
+    """A local validation failure, before any Telegram upload was attempted."""
     pass
 
 
@@ -310,81 +318,118 @@ class TelegramRelay:
         self.report("Telegram relay failed (" + _failure_details(exc) +
                     "); captured content remains local. No automatic resend.")
 
-    def _document(self, media, caption, *, topic_id=None, route=None):
-        relative = Path(media["localPath"])
+    @contextmanager
+    def _saved_file(self, media):
+        relative = Path(media.get("localPath", ""))
         root = self.store.root / "media"
         target = self.store.root / relative
         if relative.is_absolute() or not relative.parts or relative.parts[0] != "media" or not target.resolve().is_relative_to(root):
-            raise ValueError("Invalid saved media path.")
-        descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            raise AttachmentUnavailable("A saved attachment is unavailable; captured details remain local.")
+        try:
+            descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except OSError:
+            raise AttachmentUnavailable("A saved attachment is unavailable; captured details remain local.") from None
         with os.fdopen(descriptor, "rb") as handle:
             info = os.fstat(handle.fileno())
             if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_UPLOAD_BYTES or info.st_size != media.get("savedBytes"):
-                raise ValueError("Saved file is unavailable or exceeds the Telegram limit.")
+                raise AttachmentUnavailable("An attachment is unavailable or exceeds Telegram's file-upload limit; files remain local.")
             digest = hashlib.sha256()
             while block := handle.read(65536):
                 digest.update(block)
             if digest.hexdigest() != media.get("sha256"):
-                raise ValueError("Saved file integrity check failed.")
-            boundary = "messenger-" + secrets.token_hex(16)
-            rich = caption if isinstance(caption, RichText) else RichText().add(caption)
-            caption_text, caption_entities = next(rich.pages(900), ("Attachment", []))
+                raise AttachmentUnavailable("A saved attachment failed its integrity check; files remain local.")
             filename = re.sub(r'[^A-Za-z0-9._-]', "_", target.name)[:150] or "attachment.bin"
-            suffix = ("\r\n--" + boundary + "--\r\n").encode()
-            def send(current_topic):
-                # A definitive rejection can consume the entire first upload.
-                # Rebuild fields and rewind only for the one permitted retry.
-                handle.seek(0)
-                fields = {"chat_id": self._destination_chat(), "caption": caption_text,
-                          "caption_entities": json.dumps(caption_entities), "disable_notification": "true"}
-                if current_topic is not None:
-                    fields["message_thread_id"] = str(current_topic)
-                prefix = b""
-                for key, value in fields.items():
-                    prefix += ("--" + boundary + '\r\nContent-Disposition: form-data; name="' + key + '"\r\n\r\n' + value + "\r\n").encode()
-                prefix += ("--" + boundary + '\r\nContent-Disposition: form-data; name="document"; filename="' + filename + '"\r\nContent-Type: application/octet-stream\r\n\r\n').encode()
-                def body():
-                    yield prefix
-                    while block := handle.read(65536):
-                        if self.stopping.is_set():
-                            raise InterruptedError
-                        yield block
-                    yield suffix
-                return self._post("sendDocument", body(), "multipart/form-data; boundary=" + boundary,
-                                  length=len(prefix) + info.st_size + len(suffix))
-            self._send_in_topic(send, topic_id=topic_id, route=route)
+            handle.seek(0)
+            yield handle, filename
+
+    def _upload(self, handle, filename, caption, *, topic_id=None, route=None):
+        size = handle.seek(0, os.SEEK_END)
+        if size > MAX_UPLOAD_BYTES:
+            raise AttachmentUnavailable("The combined download exceeds Telegram's file-upload limit; files remain local.")
+        rich = caption if isinstance(caption, RichText) else RichText().add(caption)
+        if rich.length > 900:
+            raise ValueError("Use a downloadable transcript for long captions.")
+        caption_entities = [entity for entity in rich.entities if entity["type"] not in {"blockquote", "expandable_blockquote"}]
+        boundary = "messenger-" + secrets.token_hex(16)
+        suffix = ("\r\n--" + boundary + "--\r\n").encode()
+        def send(current_topic):
+            # Only a definite missing-topic rejection permits rewinding and retrying.
+            handle.seek(0)
+            fields = {"chat_id": self._destination_chat(), "caption": rich.text,
+                      "caption_entities": json.dumps(caption_entities), "disable_notification": "true"}
+            if current_topic is not None:
+                fields["message_thread_id"] = str(current_topic)
+            prefix = b""
+            for key, value in fields.items():
+                prefix += ("--" + boundary + '\r\nContent-Disposition: form-data; name="' + key + '"\r\n\r\n' + value + "\r\n").encode()
+            prefix += ("--" + boundary + '\r\nContent-Disposition: form-data; name="document"; filename="' + filename + '"\r\nContent-Type: application/octet-stream\r\n\r\n').encode()
+            def body():
+                yield prefix
+                while block := handle.read(65536):
+                    if self.stopping.is_set():
+                        raise InterruptedError
+                    yield block
+                yield suffix
+            return self._post("sendDocument", body(), "multipart/form-data; boundary=" + boundary,
+                              length=len(prefix) + size + len(suffix))
+        return self._send_in_topic(send, topic_id=topic_id, route=route)
+
+    def _document(self, media, caption, *, topic_id=None, route=None):
+        with self._saved_file(media) as (handle, filename):
+            return self._upload(handle, filename, caption, topic_id=topic_id, route=route)
+
+    def _transcript(self, notice, card, route):
+        if card.length <= 3500:
+            self._text(card, route=route)
+        else:
+            with tempfile.TemporaryFile(dir=self.store.root) as output:
+                output.write(card.text.encode("utf-8"))
+                self._upload(output, "message.txt", download_caption(notice, "Full message details in message.txt."), route=route)
+
+    def _notice(self, snapshot, notice, card, route):
+        saved = [media for media in snapshot["attachments"] if media.get("downloadStatus") == "saved"] if self.send_media else []
+        try:
+            if not saved:
+                self._transcript(notice, card, route)
+            elif len(saved) == 1 and card.length <= 900:
+                self._document(saved[0], card, route=route)
+            else:
+                # Anonymous temporary files disappear on close/crash and cannot
+                # leave an extra archive behind after the retention deadline.
+                details = card.text.encode("utf-8")
+                if len(details) + sum(media.get("savedBytes", 0) for media in saved) > MAX_UPLOAD_BYTES:
+                    raise AttachmentUnavailable("The combined download exceeds Telegram's file-upload limit; files remain local.")
+                with tempfile.TemporaryFile(dir=self.store.root) as output:
+                    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as bundle:
+                        bundle.writestr("message.txt", details)
+                        for index, media in enumerate(saved, 1):
+                            with self._saved_file(media) as (source, filename):
+                                with bundle.open(f"{index:02d}_" + filename, "w") as destination:
+                                    while block := source.read(65536):
+                                        if self.stopping.is_set():
+                                            raise InterruptedError
+                                        destination.write(block)
+                    self._upload(output, "message-attachments.zip", download_caption(notice, "Download the ZIP for attachments and full message details."), route=route)
+        except AttachmentUnavailable as exc:
+            self._transcript(notice, card.add("\n\n" + str(exc), "italic"), route)
 
     def _deleted(self, tid, mid):
         snapshot = self.store.relay_snapshot(tid, mid)
         if not snapshot or not self._eligible(snapshot):
             return
+        if self.send_media and any(media.get("downloadStatus") == "pending" for media in snapshot["attachments"]):
+            return  # MediaSaver queues us again after every terminal download result.
         if self.names is not None:
             self.names.wait_for(snapshot["sender_id"])
             snapshot = self.store.relay_snapshot(tid, mid)
             if not snapshot or not self._eligible(snapshot):
                 return
         route = self._route(tid, snapshot["conversation"])
-        # Send the text immediately, then follow up when pending downloads finish.
         notice = dict(snapshot)
         notice["attachments"] = [{key: value for key, value in item.items() if key not in {"url", "previewUrl", "localPath"}}
                                  for item in snapshot["attachments"]]
         phase = "deleted" if snapshot["deleted"] else "message"
-        text_part = "text:" + phase + (":captured" if snapshot["original_text"] is not None else ":unavailable")
-        self._attempt(tid, mid, text_part, lambda: self._text(message_card(notice, self.zone), route=route))
-        if not self.send_media:
-            return
-        for index, media in enumerate(snapshot["attachments"]):
-            status = media.get("downloadStatus")
-            title = attachment_card(snapshot, media, index, self.zone)
-            if status == "saved" and media.get("localPath"):
-                part = "media:" + str(index) + ":" + str(media.get("sha256", ""))
-                if media.get("savedBytes", 0) > MAX_UPLOAD_BYTES:
-                    self._attempt(tid, mid, part, lambda title=title: self._text(title.add("\n\nSaved locally; exceeds Telegram's file-upload limit.", "italic"), route=route))
-                else:
-                    self._attempt(tid, mid, part, lambda media=media, title=title: self._document(media, title, route=route))
-            elif status in {"failed", "interrupted"}:
-                self._attempt(tid, mid, "media-status:" + str(index) + ":" + status,
-                              lambda title=title, status=status: self._text(title.add("\n\nLocal download: " + status + ". Captured metadata is retained.", "italic"), route=route))
+        self._attempt(tid, mid, "notice:" + phase, lambda: self._notice(snapshot, notice, message_card(notice, self.zone), route))
 
     def _work(self):
         while not self.stopping.is_set():

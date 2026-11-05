@@ -148,13 +148,13 @@ class StoreTests(TemporaryTest):
         self.assertEqual(text.count("second event"), 1)
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM events WHERE exported=0").fetchone()[0], 0)
 
-    def test_warsaw_date_routing_and_unresolved_edit(self):
+    def test_warsaw_date_routing_and_unattributed_edit_exclusion(self):
         from datetime import datetime, timezone
         received = datetime(2026, 11, 3, 23, 30, tzinfo=timezone.utc).timestamp()
         self.store.accept(message(), received=received)
         self.assertTrue(list(self.store.logs.rglob("4_11_2026")))
         self.store.accept({"type": "messageEdit", "data": {"messageId": "not-observed", "newText": "edit without original"}, "timestamp": 777})
-        self.assertEqual(self.store.db.execute("SELECT thread_id FROM events WHERE type='edit'").fetchone()[0], "unresolved")
+        self.assertIsNone(self.store.db.execute("SELECT thread_id FROM events WHERE type='edit'").fetchone())
 
     def test_never_store_raw_device_key_events(self):
         for event in ({"type": "deviceDataChanged", "data": {"deviceData": SECRET}}, {"type": "raw", "data": {"from": "whatsmeow", "data": SECRET}}):
