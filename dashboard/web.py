@@ -59,14 +59,24 @@ def create_app(store=None, *, origin=None, status_root=None, testing=False):
 
     @app.before_request
     def authenticate():
+        if request.endpoint in {"static", "favicon"}:
+            return None
         g.csrf = session.setdefault("csrf", secrets.token_urlsafe(32))
         if request.method == "POST":
             supplied = request.form.get("csrf", "")
-            if not hmac.compare_digest(supplied, g.csrf) or request.headers.get("Origin", origin).rstrip("/") != origin:
+            token_matches = supplied.isascii() and hmac.compare_digest(supplied, g.csrf)
+            origin_matches = request.headers.get("Origin", origin).rstrip("/") == origin
+            if not token_matches or not origin_matches:
+                app.logger.warning("Dashboard form rejected (reason=%s; session_cookie_present=%s; token_present=%s; origin_matches=%s).",
+                    "csrf_mismatch" if not token_matches else "origin_mismatch",
+                    bool(request.cookies.get(app.config["SESSION_COOKIE_NAME"])), bool(supplied), origin_matches)
                 abort(403)
         if request.endpoint not in {"login", "static"}:
             if not store.session(session.get("sid")):
-                session.clear()
+                # Background requests and another anonymous tab must not
+                # invalidate a login form that is already open in the browser.
+                if "sid" in session:
+                    session.pop("sid")
                 return redirect(url_for("login"))
 
     @app.after_request
@@ -84,6 +94,10 @@ def create_app(store=None, *, origin=None, status_root=None, testing=False):
     @app.template_filter("filesize")
     def filesize(value):
         return f"{value / 1024 ** 3:.1f} GB" if isinstance(value, (int, float)) else "—"
+
+    @app.get("/favicon.ico")
+    def favicon():
+        return "", 204
 
     @app.route("/login", methods=["GET", "POST"])
     def login():

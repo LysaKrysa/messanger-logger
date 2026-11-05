@@ -179,9 +179,10 @@ class WebTests(Base):
         self.assertEqual(response.status_code, 302)
 
     def test_dashboard_requires_sign_in_and_secure_cookie(self):
-        self.assertEqual(self.client.get("/", base_url=ORIGIN).status_code, 302)
+        initial = self.client.get("/", base_url=ORIGIN)
+        self.assertEqual(initial.status_code, 302)
         response = self.client.get("/login", base_url=ORIGIN)
-        cookie = response.headers.get("Set-Cookie")
+        cookie = initial.headers.get("Set-Cookie")
         self.assertIn("Secure", cookie)
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)
@@ -194,6 +195,48 @@ class WebTests(Base):
         self.assertEqual(self.client.post("/accounts/new", base_url=ORIGIN, data={"name": "Friend"}).status_code, 403)
         self.assertEqual(self.client.post("/accounts/new", base_url=ORIGIN, headers={"Origin": "https://evil.example"}, data={"csrf": self.csrf(), "name": "Friend"}).status_code, 403)
         self.assertEqual(self.store.accounts(), [])
+
+    def test_background_favicon_does_not_invalidate_an_open_login_form(self):
+        self.client.get("/login", base_url=ORIGIN)
+        original = self.csrf()
+        response = self.client.get("/favicon.ico", base_url=ORIGIN, follow_redirects=True)
+        self.assertEqual(response.status_code, 204)
+        self.assertNotIn("Set-Cookie", response.headers)
+        self.assertEqual(self.csrf(), original)
+        response = self.client.post("/login", base_url=ORIGIN, headers={"Origin": ORIGIN},
+                                    data={"csrf": original, "password": PASSWORD})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self.client.get("/", base_url=ORIGIN).status_code, 200)
+        self.assertNotEqual(self.csrf(), original)
+
+    def test_anonymous_protected_request_preserves_the_open_form_token(self):
+        self.client.get("/login", base_url=ORIGIN)
+        original = self.csrf()
+        response = self.client.get("/accounts/new", base_url=ORIGIN, follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.csrf(), original)
+        self.assertTrue(all("Set-Cookie" not in item.headers for item in (*response.history, response)))
+
+    def test_static_assets_do_not_create_anonymous_session_cookies(self):
+        for path in ("/static/app.css", "/static/app.js", "/favicon.ico"):
+            with self.client.get(path, base_url=ORIGIN) as response:
+                self.assertIn(response.status_code, {200, 204})
+                self.assertNotIn("Set-Cookie", response.headers)
+
+    def test_rejection_diagnostics_do_not_log_passwords_or_tokens(self):
+        self.client.get("/login", base_url=ORIGIN)
+        with self.assertLogs(self.app.logger, level="WARNING") as captured:
+            response = self.client.post("/login", base_url=ORIGIN,
+                data={"csrf": "PRIVATE_CSRF_SENTINEL", "password": "PRIVATE_PASSWORD_SENTINEL"})
+        self.assertEqual(response.status_code, 403)
+        line = " ".join(captured.output)
+        self.assertIn("reason=csrf_mismatch", line)
+        self.assertNotIn("PRIVATE_", line)
+        with self.assertLogs(self.app.logger, level="WARNING") as captured:
+            response = self.client.post("/login", base_url=ORIGIN, headers={"Origin": "https://foreign.example"},
+                data={"csrf": self.csrf(), "password": PASSWORD})
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("reason=origin_mismatch", " ".join(captured.output))
 
     def test_full_account_setup_forms_hide_saved_secrets_and_escape_labels(self):
         self.login()
