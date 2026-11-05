@@ -12,6 +12,9 @@ Railway/fbchat-v1 implementation, which is not included here.
 | fbchat-v2 upstream root | Apache-2.0 | `LICENSES/Apache-2.0.txt` |
 | mautrix-meta | AGPL-3.0-or-later, with its upstream exception record | `LICENSE`, `LICENSES/mautrix-meta.exceptions.txt` |
 | Transitive Go dependencies | Their respective upstream licenses | Exact upstream `go.mod`/`go.sum` at the pinned revisions |
+| Optional dashboard: Flask and Werkzeug | BSD-3-Clause | [Pallets license](https://github.com/pallets/flask/blob/main/LICENSE.txt); installed package metadata includes dependency notices |
+| Optional dashboard: cryptography | Apache-2.0 OR BSD-3-Clause | [Upstream license](https://github.com/pyca/cryptography/blob/main/LICENSE) |
+| Optional dashboard: Gunicorn | MIT | [Upstream license](https://github.com/benoitc/gunicorn/blob/master/LICENSE) |
 
 The upstream bridge README also credits code derived from
 [meta-messenger.js](https://github.com/yumi-team/meta-messenger.js). Consult the

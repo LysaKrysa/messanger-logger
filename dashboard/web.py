@@ -1,0 +1,169 @@
+"""Administrator-only web UI. Never exposes saved credentials or archive bodies."""
+from __future__ import annotations
+
+import hmac
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+from urllib.request import Request, urlopen
+from urllib.parse import urlsplit
+
+from flask import Flask, abort, g, redirect, render_template, request, session, url_for
+from werkzeug.exceptions import HTTPException
+
+from .store import BOT_TOKEN, DashboardError, from_environment
+
+
+def verify_bot(token):
+    if not BOT_TOKEN.fullmatch(token):
+        raise DashboardError("Enter a valid BotFather token.")
+    try:
+        req = Request("https://api.telegram.org/bot" + token + "/getMe", data=b"{}", headers={"Content-Type": "application/json"})
+        with urlopen(req, timeout=15) as response:
+            raw = response.read(65537)
+        if len(raw) > 65536:
+            raise ValueError
+        payload = json.loads(raw)
+        if payload.get("ok") is not True:
+            raise ValueError
+        return payload["result"]
+    except Exception:
+        raise DashboardError("Telegram could not verify the bot. Check its token and server connectivity.") from None
+
+
+def create_app(store=None, *, origin=None, status_root=None, testing=False):
+    app = Flask(__name__)
+    store = store or from_environment()
+    origin = (origin or os.environ.get("DASHBOARD_ORIGIN", "https://localhost:8443")).rstrip("/")
+    parsed = urlsplit(origin)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
+        raise DashboardError("Configure an HTTPS dashboard origin.")
+    status_root = Path(status_root or os.environ.get("DASHBOARD_STATUS_DIR", "/var/lib/messenger-dashboard-status"))
+    app.config.update(SECRET_KEY=store.secret("flask-session"), TESTING=testing, MAX_CONTENT_LENGTH=160 * 1024,
+                      SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Strict",
+                      SESSION_COOKIE_NAME="messenger_admin", TRUSTED_HOSTS=[parsed.hostname], MAX_FORM_PARTS=12,
+                      MAX_FORM_MEMORY_SIZE=140 * 1024)
+    app.extensions["store"] = store
+
+    def status(ident):
+        try:
+            value = json.loads((status_root / (ident + ".json")).read_text())
+            if not isinstance(value, dict):
+                return {}
+            value["stale"] = store.clock() - value.get("updated", 0) > 120
+            return value
+        except (OSError, ValueError, TypeError):
+            return {"state": "unknown", "stale": True}
+
+    @app.before_request
+    def authenticate():
+        g.csrf = session.setdefault("csrf", secrets.token_urlsafe(32))
+        if request.method == "POST":
+            supplied = request.form.get("csrf", "")
+            if not hmac.compare_digest(supplied, g.csrf) or request.headers.get("Origin", origin).rstrip("/") != origin:
+                abort(403)
+        if request.endpoint not in {"login", "static"}:
+            if not store.session(session.get("sid")):
+                session.clear()
+                return redirect(url_for("login"))
+
+    @app.after_request
+    def secure_headers(response):
+        response.headers.update({"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin", "Strict-Transport-Security": "max-age=31536000",
+            "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            "Permissions-Policy": "camera=(), microphone=(), geolocation=()"})
+        return response
+
+    @app.context_processor
+    def context():
+        return {"csrf": getattr(g, "csrf", ""), "bot": store.bot(), "capacity": store.max_accounts}
+
+    @app.template_filter("filesize")
+    def filesize(value):
+        return f"{value / 1024 ** 3:.1f} GB" if isinstance(value, (int, float)) else "—"
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        error = None
+        if request.method == "POST":
+            try:
+                sid = store.login(request.form.get("password", ""), request.remote_addr or "unknown")
+                session.clear()
+                session.update(sid=sid, csrf=secrets.token_urlsafe(32))
+                return redirect(url_for("index"))
+            except DashboardError as exc:
+                error = str(exc)
+        return render_template("login.html", error=error)
+
+    @app.post("/logout")
+    def logout():
+        store.session(session.get("sid"), revoke=True)
+        session.clear()
+        return redirect(url_for("login"))
+
+    @app.get("/")
+    def index():
+        accounts = store.accounts()
+        for account in accounts:
+            account["status"] = status(account["id"])
+        host = status("host")
+        return render_template("index.html", accounts=accounts, host=host,
+                               connected=sum(a["status"].get("ready", False) and not a["status"].get("stale") for a in accounts),
+                               bot_status=store.setting("bot_status", "Waiting for the invitation receiver"))
+
+    @app.route("/accounts/new", methods=["GET", "POST"])
+    def new_account():
+        if request.method == "POST":
+            ident = store.add_account(request.form.get("name", ""), request.form.get("cookies", ""))
+            return redirect(url_for("account", ident=ident))
+        return render_template("new.html")
+
+    def account_page(ident, **extra):
+        account = store.account(ident)
+        if not account:
+            abort(404)
+        return render_template("account.html", account=account, status=status(ident), **extra)
+
+    @app.get("/accounts/<ident>")
+    def account(ident):
+        return account_page(ident)
+
+    @app.post("/accounts/<ident>/cookies")
+    def cookies(ident):
+        store.update_cookies(ident, request.form.get("cookies", ""))
+        return redirect(url_for("account", ident=ident))
+
+    @app.post("/accounts/<ident>/invite")
+    def invite(ident):
+        return account_page(ident, invite=store.invite(ident))
+
+    @app.post("/accounts/<ident>/<action>")
+    def action(ident, action):
+        store.action(ident, action, mode=request.form.get("mode", "deleted"), view_once=request.form.get("view_once") == "on")
+        if action == "remove":
+            return redirect(url_for("index"))
+        return redirect(url_for("account", ident=ident))
+
+    @app.route("/bot", methods=["GET", "POST"])
+    def bot_settings():
+        if request.method == "POST":
+            token = request.form.get("token", "").strip()
+            store.configure_bot(token, verify_bot(token))
+            return redirect(url_for("bot_settings"))
+        return render_template("bot.html", bot_status=store.setting("bot_status", "Waiting for setup"))
+
+    @app.errorhandler(DashboardError)
+    def invalid(error):
+        return render_template("error.html", message=str(error)), 400
+
+    @app.errorhandler(Exception)
+    def error(error):
+        code = error.code if isinstance(error, HTTPException) else 500
+        message = {400: "The request was not accepted.", 403: "The form expired or its source could not be verified. Reload the page and try again.",
+                   404: "This page was not found.", 413: "The submitted form is too large."}.get(code, "The operation could not be completed. Private details are hidden.")
+        return render_template("error.html", message=message), code
+
+    return app

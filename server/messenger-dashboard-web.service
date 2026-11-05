@@ -1,0 +1,26 @@
+[Unit]
+Description=Messenger administrator HTTPS dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=messenger-dashboard
+Group=messenger-dashboard
+WorkingDirectory=/opt/messenger-dashboard/app
+EnvironmentFile=/etc/messenger-dashboard/service.env
+ExecStart=/opt/messenger-dashboard/venv/bin/gunicorn --config dashboard/gunicorn.py --bind 0.0.0.0:8443 --certfile /etc/messenger-dashboard/tls.crt --keyfile /etc/messenger-dashboard/tls.key dashboard.web:create_app()
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/messenger-dashboard
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=384M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

@@ -16,6 +16,7 @@ import threading
 import time
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from telegram_format import RichText, chunks, message_card, attachment_card, event_card
@@ -123,13 +124,25 @@ class TelegramRelay:
         if self.enabled:
             self.token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
             self.chat = os.environ.get("TELEGRAM_CHAT_ID", "")
+            self.gateway = os.environ.get("TELEGRAM_RELAY_URL", "")
+            self.account_key = os.environ.get("TELEGRAM_ACCOUNT_KEY", "")
+            bot_id = self.token.split(":", 1)[0]
+            if self.gateway:
+                parsed = urlsplit(self.gateway)
+                if parsed.scheme != "http" or parsed.hostname != "127.0.0.1" or not parsed.port or parsed.path not in {"", "/"} or parsed.username or parsed.password or parsed.query or parsed.fragment:
+                    raise TelegramConfigurationError("The shared Telegram gateway must use a loopback HTTP address.")
+                if not re.fullmatch(r"[a-f0-9]{32}\.[a-f0-9]{64}", self.account_key):
+                    raise TelegramConfigurationError("The shared Telegram gateway requires an account credential.")
+                bot_id = os.environ.get("TELEGRAM_BOT_ID", "")
+                if not re.fullmatch(r"[0-9]{1,20}", bot_id):
+                    raise TelegramConfigurationError("The shared Telegram bot ID is required.")
             self.interval = 3.1 if self.chat.startswith(("-", "@")) else 1.05
             if self.mode not in {"deleted", "all"}:
                 raise TelegramConfigurationError("TELEGRAM_MODE must be deleted or all.")
-            if not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", self.token) or not self.chat.strip() or len(self.chat) > 128 or any(char in self.chat for char in "\r\n"):
+            if (not self.gateway and not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", self.token)) or not self.chat.strip() or len(self.chat) > 128 or any(char in self.chat for char in "\r\n"):
                 raise TelegramConfigurationError("Telegram requires TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
             if self.use_topics:
-                self.topics = TopicRouter(self._api, store, self.token.split(":", 1)[0], self.chat)
+                self.topics = TopicRouter(self._api, store, bot_id, self.chat)
             if start:
                 self.thread = threading.Thread(target=self._work, name="telegram-relay", daemon=True)
                 self.thread.start()
@@ -182,9 +195,12 @@ class TelegramRelay:
             raise InterruptedError
         self.next_send = time.monotonic() + self.interval
         headers = {"Content-Type": content_type}
+        if self.gateway:
+            headers["Authorization"] = "Bearer " + self.account_key
         if length is not None:
             headers["Content-Length"] = str(length)
-        request = Request("https://api.telegram.org/bot" + self.token + "/" + method,
+        url = self.gateway.rstrip("/") + "/telegram/" + method if self.gateway else "https://api.telegram.org/bot" + self.token + "/" + method
+        request = Request(url,
                           data=body, headers=headers, method="POST")
         try:
             with urlopen(request, timeout=30) as response:

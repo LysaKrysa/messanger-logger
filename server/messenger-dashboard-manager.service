@@ -1,0 +1,26 @@
+[Unit]
+Description=Messenger account container manager
+Requires=docker.service
+After=docker.service network-online.target messenger-dashboard-bot.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/messenger-dashboard/app
+EnvironmentFile=/etc/messenger-dashboard/service.env
+ExecStart=/opt/messenger-dashboard/venv/bin/python -m dashboard.manager
+Restart=on-failure
+RestartSec=10
+UMask=0077
+RuntimeDirectory=messenger-dashboard-workers
+RuntimeDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/messenger-accounts /var/lib/messenger-dashboard-status /run/messenger-dashboard-workers /var/lib/messenger-dashboard
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

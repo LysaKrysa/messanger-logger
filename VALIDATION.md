@@ -1,5 +1,26 @@
 # Validation
 
+## Optional administrator workspace
+
+- 172 standalone tests pass, including the pinned native offline RPC test and
+  mounted-credential/gateway configuration checks.
+- 34 optional dashboard tests cover encrypted credentials, account identity,
+  expiring invitations, approval, destination isolation, sessions, CSRF,
+  migration rollback, independent archives, cleanup, and account removal.
+- A real HTTPS browser flow verifies sign-in, account creation, hidden saved
+  cookies, invitation/approval/start, and mobile layout without horizontal
+  overflow. Screenshots use synthetic accounts only.
+- Real Docker fixture workers verify separate identities/data, runtime-mounted
+  secrets without credential environment metadata, resource limits, graceful
+  shutdown, offline cleanup, and scoped removal. The test also exercises a root
+  controller using an unprivileged owner's SQLite WAL files.
+- ARM64 binary wheels for the pinned cryptography dependency and CFFI were
+  verified available for Ubuntu's Python 3.12; native inputs remain unchanged.
+
+These checks make no Facebook login or real Telegram send. Actual Oracle
+deployment still requires the operator to configure ingress, verify certificate
+trust, and test their own sessions and approved Telegram destinations.
+
 Offline checks completed on Linux amd64, 5 November 2026.
 
 ## Current source tree

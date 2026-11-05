@@ -10,6 +10,7 @@ from pathlib import Path
 import queue
 import re
 import signal
+import stat
 import sys
 import threading
 import time
@@ -28,6 +29,28 @@ SCRIPT_STARTED_AT = time.time()
 
 class ConfigurationError(ValueError):
     pass
+
+
+def load_runtime_credentials():
+    """Optional dashboard secrets mounted from host /run, outside Docker metadata."""
+    path = os.environ.get("LOGGER_CREDENTIALS_FILE")
+    if not path:
+        return
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(descriptor, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                raise ValueError
+            raw = handle.read(150001)
+        if len(raw) > 150000:
+            raise ValueError
+        values = json.loads(raw)
+        if not isinstance(values, dict) or set(values) != {"FB_SESSION_JSON", "TELEGRAM_ACCOUNT_KEY"} or not all(isinstance(v, str) and "\n" not in v and "\r" not in v for v in values.values()):
+            raise ValueError
+        for name, value in values.items():
+            os.environ[name] = value
+    except (OSError, ValueError, TypeError):
+        raise ConfigurationError("The mounted account credentials could not be read.") from None
 
 
 def boolean(name, default=False):
@@ -264,6 +287,7 @@ def main():
         verify_binary(binary)
         smoke_test(binary)
         return
+    load_runtime_credentials()
     cookies = parse_cookies(os.environ.get("FB_SESSION_JSON", ""))
     encrypted = boolean("LOGGER_E2EE", True)
     zone = os.environ.get("LOGGER_TIMEZONE", "Europe/Warsaw")
