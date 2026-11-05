@@ -48,6 +48,19 @@ def main():
         store = Store(root / 'state', Fernet.generate_key())
         store.configure_bot('123456:' + 'SYNTHETIC_OFFLINE_TOKEN_NOT_REAL' * 2,
                             {'id': 123456, 'username': 'synthetic_offline_bot', 'has_topics_enabled': True})
+        database_uid = int(os.environ.get('SUDO_UID', '65534'))
+        database_gid = int(os.environ.get('SUDO_GID', '65534'))
+        root.chmod(0o755)
+        os.chown(store.root, database_uid, database_gid)
+        os.chown(store.path, database_uid, database_gid)
+        # Real production topology: root controller + unprivileged database
+        # owner. WAL/SHM files must remain accessible to that owner.
+        with store.db() as db:
+            db.execute('SELECT * FROM settings').fetchall()
+            assert os.geteuid() == database_uid
+            for suffix in ('-wal', '-shm'):
+                assert Path(str(store.path) + suffix).stat().st_uid == database_uid
+        assert os.geteuid() == 0
         manager = Manager(store, data_root=root/'accounts', status_root=root/'status', runtime_root=root/'run', code_root=code, image=args.image)
         ids = []
         try:

@@ -70,14 +70,26 @@ class Store:
     def db(self):
         if self.readonly and not self.path.is_file():
             raise DashboardError("Dashboard configuration is not initialized.")
-        db = sqlite3.connect(self.path.resolve().as_uri() + ("?mode=ro" if self.readonly else "?mode=rw"), uri=True, timeout=10) if self.path.exists() else sqlite3.connect(self.path, timeout=10)
-        db.row_factory = sqlite3.Row
-        db.execute("PRAGMA trusted_schema=OFF")
+        # Even a read-only SQLite WAL connection creates shared-memory files.
+        # The root CLI/controller must create those as the database owner, so
+        # they cannot leave root-owned 0600 files that block the web/bot user.
+        previous = os.geteuid()
+        owner = self.path.stat().st_uid if self.path.exists() else self.root.stat().st_uid
+        switched = previous == 0 and owner != 0
+        if switched:
+            os.seteuid(owner)
         try:
-            with db:
-                yield db
+            db = sqlite3.connect(self.path.resolve().as_uri() + ("?mode=ro" if self.readonly else "?mode=rw"), uri=True, timeout=10) if self.path.exists() else sqlite3.connect(self.path, timeout=10)
+            db.row_factory = sqlite3.Row
+            db.execute("PRAGMA trusted_schema=OFF")
+            try:
+                with db:
+                    yield db
+            finally:
+                db.close()
         finally:
-            db.close()
+            if switched:
+                os.seteuid(previous)
 
     def seal(self, purpose, value):
         return self.cipher.encrypt(json.dumps({"purpose": purpose, "value": value}).encode()).decode()
