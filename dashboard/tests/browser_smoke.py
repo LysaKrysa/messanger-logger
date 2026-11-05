@@ -58,6 +58,9 @@ def main():
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
                 page.goto(origin + "/login")
+                # Headless browsers may omit the automatic favicon fetch made
+                # by a normal browser's tab UI. Exercise it explicitly.
+                assert page.request.get(origin + "/favicon.ico").status == 204
                 page.get_by_label("Administrator password").fill("synthetic-browser-password")
                 page.get_by_role("button", name="Sign in").click()
                 page.wait_for_url(origin + "/")
