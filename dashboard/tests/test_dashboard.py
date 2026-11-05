@@ -186,6 +186,7 @@ class WebTests(Base):
         self.assertIn("HttpOnly", cookie)
         self.assertIn("SameSite=Strict", cookie)
         self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertEqual(response.headers["Referrer-Policy"], "same-origin")
         self.assertIn("frame-ancestors 'none'", response.headers["Content-Security-Policy"])
 
     def test_csrf_and_foreign_origins_are_rejected(self):
