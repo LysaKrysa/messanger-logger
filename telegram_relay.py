@@ -9,11 +9,13 @@ from pathlib import Path
 import queue
 import re
 import secrets
+import socket
+import ssl
 import stat
 import threading
 import time
 from urllib.request import Request, urlopen
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from zoneinfo import ZoneInfo
 
 from telegram_format import RichText, chunks, message_card, attachment_card, event_card
@@ -21,10 +23,71 @@ from telegram_topics import TopicRouter, TopicError, TelegramRejected
 
 # Cloud Bot API multipart uploads: https://core.telegram.org/bots/api#sending-files
 MAX_UPLOAD_BYTES = 50_000_000
+ERROR_RESPONSE_BYTES = 8192
+API_METHODS = frozenset({"getMe", "getChat", "getChatMember", "createForumTopic",
+                         "editForumTopic", "sendMessage", "sendDocument"})
 
 
 class TelegramConfigurationError(ValueError):
     pass
+
+
+def _request_details(method, code, reason):
+    method = method if method in API_METHODS else "unknown"
+    code = code if type(code) is int and 100 <= code <= 599 else "unknown"
+    return "method={}; status={}; reason={}".format(method, code, reason)
+
+
+def _rejection_reason(code, payload):
+    # Only fixed categories leave this function; provider text may contain secrets.
+    if code == 429:
+        return "rate_limited"
+    if code == 401:
+        return "unauthorized"
+    description = payload.get("description") if isinstance(payload, dict) else None
+    description = description[:4096].lower() if isinstance(description, str) else ""
+    for marker, reason in (
+        ("message thread not found", "topic_missing"),
+        ("message_thread_id_invalid", "topic_missing"),
+        ("topic_deleted", "topic_missing"),
+        ("topic_closed", "topic_closed"),
+        ("topic is closed", "topic_closed"),
+        ("can't parse entities", "invalid_entities"),
+        ("cannot parse entities", "invalid_entities"),
+        ("bot was blocked", "bot_blocked"),
+        ("bot can't initiate conversation", "bot_not_started"),
+        ("user is deactivated", "user_deactivated"),
+        ("chat not found", "chat_not_found"),
+        ("not enough rights", "permission_denied"),
+        ("bot is not a member", "permission_denied"),
+        ("message is too long", "message_too_long"),
+        ("message text is empty", "empty_text"),
+        ("file is too big", "file_too_large"),
+        ("request entity too large", "file_too_large"),
+    ):
+        if marker in description:
+            return reason
+    return "request_rejected"
+
+
+class TelegramAPIRejected(TelegramRejected):
+    """A definite rejection, compatible with the topic creation safety checks."""
+    def __init__(self, method, code, payload=None):
+        super().__init__(code)
+        self.details = _request_details(method, code, _rejection_reason(code, payload))
+
+
+class TelegramRequestError(RuntimeError):
+    """An unconfirmed outcome with static diagnostics and no provider text."""
+    def __init__(self, method, reason, code=None):
+        self.details = _request_details(method, code, reason)
+        super().__init__(self.details)
+
+
+def _failure_details(exc):
+    if isinstance(exc, (TelegramAPIRejected, TelegramRequestError)):
+        return exc.details
+    return _request_details("unknown", None, "local_or_unclassified_error")
 
 
 def boolean(name, default):
@@ -126,17 +189,40 @@ class TelegramRelay:
             with urlopen(request, timeout=30) as response:
                 raw = response.read(1024 * 1024 + 1)
         except HTTPError as exc:
+            # Inspect a bounded error body privately, then discard it. Never log
+            # HTTPError itself: its URL includes the bot token.
+            payload = None
+            try:
+                raw = exc.read(ERROR_RESPONSE_BYTES + 1)
+                if len(raw) <= ERROR_RESPONSE_BYTES:
+                    payload = json.loads(raw)
+            except (OSError, ValueError):
+                pass
+            finally:
+                exc.close()
             if 400 <= exc.code < 500:
-                raise TelegramRejected(exc.code) from None
-            raise ValueError("Telegram request outcome is unconfirmed.") from None
+                raise TelegramAPIRejected(method, exc.code, payload) from None
+            raise TelegramRequestError(method, "server_error" if exc.code >= 500 else "http_error", exc.code) from None
+        except InterruptedError:
+            raise
+        except OSError as exc:
+            cause = exc.reason if isinstance(exc, URLError) else exc
+            reason = ("dns_error" if isinstance(cause, socket.gaierror) else
+                      "tls_error" if isinstance(cause, ssl.SSLError) else
+                      "timeout" if isinstance(cause, TimeoutError) else "connection_error")
+            raise TelegramRequestError(method, reason) from None
         if len(raw) > 1024 * 1024:
-            raise ValueError("Telegram request was not accepted.")
-        payload = json.loads(raw)
+            raise TelegramRequestError(method, "response_too_large")
+        try:
+            payload = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise TelegramRequestError(method, "invalid_response_json") from None
         if not isinstance(payload, dict) or payload.get("ok") is not True:
             code = payload.get("error_code") if isinstance(payload, dict) else None
             if isinstance(code, int) and not isinstance(code, bool) and 400 <= code < 500:
-                raise TelegramRejected(code)
-            raise ValueError("Telegram request was not accepted.")
+                raise TelegramAPIRejected(method, code, payload)
+            reason = "server_error" if type(code) is int and 500 <= code <= 599 else "invalid_response"
+            raise TelegramRequestError(method, reason, code)
         return payload.get("result")
 
     def _api(self, method, parameters):
@@ -166,12 +252,16 @@ class TelegramRelay:
             return
         try:
             action()
-        except Exception:
+        except Exception as exc:
             self.store.finish_telegram(tid, mid, part, "failed")
-            self.report("Telegram relay failed; captured content remains local. No automatic retry of an ambiguous send.")
+            self._report_failure(exc)
         else:
             self.store.finish_telegram(tid, mid, part, "sent")
             self.report("Telegram notification sent.")
+
+    def _report_failure(self, exc):
+        self.report("Telegram relay failed (" + _failure_details(exc) +
+                    "); captured content remains local. No automatic resend.")
 
     def _document(self, media, caption, *, topic_id=None):
         relative = Path(media["localPath"])
@@ -262,8 +352,8 @@ class TelegramRelay:
                     self._text(event_card(item["thread"], plain, item["type"]), topic_id=topic_id)
             except TopicError as exc:
                 self.report("Telegram topics: " + str(exc) + " Local content remains saved.")
-            except Exception:
-                self.report("Telegram relay could not process a notification. Local logs remain saved; private details hidden.")
+            except Exception as exc:
+                self._report_failure(exc)
             finally:
                 self.items.task_done()
 

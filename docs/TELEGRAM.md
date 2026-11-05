@@ -41,6 +41,9 @@ type/group permission.
 A failed setup check has a 30-second cooldown. A restarted process checks again
 immediately. The standalone diagnostic always performs a fresh check.
 
+Ready confirms setup and capability, not successful delivery or the existence
+of every saved topic. A send can still fail after the check passes.
+
 With `TELEGRAM_MODE=deleted`, send a new Messenger message and unsend it after
 capture. Sending an ordinary message alone is not a deletion-forwarding test.
 Setting changes do not replay earlier failed notices.
@@ -55,6 +58,32 @@ attachment download limits are separate from Telegram's upload limit.
 Sends are claimed in a local ledger before the request. Ambiguous sends are not
 automatically retried, avoiding duplicates. Queue overflow and failed downloads
 do not stop normal local capture.
+
+Failures include a safe method, status, and fixed reason category, for example:
+
+```text
+Telegram relay failed (method=sendMessage; status=400; reason=topic_missing); captured content remains local. No automatic resend.
+```
+
+The logger reads only a bounded error response and never prints the provider's
+description, token-bearing URL, message text, or request body. Categories are
+best-effort interpretations of Telegram errors; an unfamiliar rejection stays
+`request_rejected`.
+
+| Reason | Next step |
+| :--- | :--- |
+| `topic_missing` | Check the conversation's local topic mapping and bind its correct existing topic as described below. |
+| `topic_closed` | Reopen that topic in Telegram, then test a fresh event. |
+| `bot_blocked`, `bot_not_started` | Unblock the configured bot and open its chat with `/start`. |
+| `unauthorized`, `chat_not_found`, `permission_denied` | Check the bot token, destination, and permissions privately. |
+| `invalid_entities`, `message_too_long`, `empty_text` | Report the safe diagnostic line and whether the failure affected text or an attachment. Keep message contents private. |
+| `rate_limited` | Allow Telegram's rate limit to clear before testing a fresh event. |
+| `dns_error`, `tls_error`, `timeout`, `connection_error`, `server_error` | Check server connectivity and Telegram availability. Delivery may be unconfirmed. |
+| `request_rejected`, `invalid_response`, `invalid_response_json`, `local_or_unclassified_error` | Share the safe diagnostic line to narrow down the cause. |
+
+Test with a **new** eligible event after correcting the cause. Restarting does
+not replay failed sends. Do not clear the attempt ledger to force a resend:
+an earlier ambiguous request may already have reached Telegram.
 
 Topic mappings are scoped by bot ID, destination chat ID, and Messenger
 conversation ID. Changing the destination creates a new map. Same-name
