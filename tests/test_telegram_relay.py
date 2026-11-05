@@ -1,22 +1,28 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import queue
+import socket
+import ssl
 import sys
 import tempfile
 import threading
 import time
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from event_store import EventStore
 from media_saver import MediaSaver
-from telegram_relay import TelegramRelay, TelegramConfigurationError, chunks
+from telegram_relay import (TelegramRelay, TelegramConfigurationError, TelegramRequestError,
+                            ERROR_RESPONSE_BYTES, chunks)
 from telegram_format import RichText, units, message_card
+from telegram_topics import TopicRouter, TopicError, TelegramRejected
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -212,6 +218,131 @@ class TelegramTests(unittest.TestCase):
         self.assertEqual(self.store.db.execute("SELECT status FROM telegram_attempts").fetchone()[0], "failed")
         self.assertNotIn(TOKEN, " ".join(self.reports))
         self.assertNotIn("private original", " ".join(self.reports))
+
+    def test_http_rejections_report_fixed_categories_without_private_values(self):
+        cases = [
+            (400, "Bad Request: message thread not found", "topic_missing"),
+            (400, "Bad Request: TOPIC_CLOSED", "topic_closed"),
+            (400, "Bad Request: can't parse entities", "invalid_entities"),
+            (403, "Forbidden: bot was blocked by the user", "bot_blocked"),
+            (403, "Forbidden: bot can't initiate conversation with a user", "bot_not_started"),
+            (400, "Bad Request: chat not found", "chat_not_found"),
+            (400, "Bad Request: not enough rights to send text messages", "permission_denied"),
+            (400, "Bad Request: message is too long", "message_too_long"),
+            (400, "Bad Request: message text is empty", "empty_text"),
+            (413, "Request Entity Too Large", "file_too_large"),
+            (429, "Too Many Requests", "rate_limited"),
+            (401, "Unauthorized", "unauthorized"),
+            (400, "Unknown provider rejection", "request_rejected"),
+        ]
+        for code, description, reason in cases:
+            with self.subTest(reason=reason):
+                body = io.BytesIO(json.dumps({"ok": False, "error_code": code,
+                    "description": description + " PRIVATE_MESSAGE " + TOKEN}).encode())
+                error = HTTPError("https://api.telegram.org/bot" + TOKEN, code,
+                                  "PRIVATE_MESSAGE", None, body)
+                with patch("telegram_relay.urlopen", side_effect=error), self.assertRaises(TelegramRejected) as caught:
+                    self.relay._api("sendMessage", {"text": "PRIVATE_MESSAGE"})
+                self.assertEqual(caught.exception.code, code)
+                self.assertEqual(caught.exception.details,
+                    "method=sendMessage; status={}; reason={}".format(code, reason))
+                self.assertNotIn("PRIVATE_MESSAGE", str(caught.exception))
+                self.assertNotIn(TOKEN, str(caught.exception))
+                self.assertTrue(body.closed)
+
+    def test_rejected_send_logs_details_and_keeps_failed_attempt_without_replay(self):
+        error = HTTPError("https://api.telegram.org/bot" + TOKEN, 400, "PRIVATE_MESSAGE", None,
+                          io.BytesIO(b'{"ok":false,"description":"Bad Request: message thread not found"}'))
+        with patch("telegram_relay.urlopen", side_effect=error) as send:
+            self.accept(message())
+            self.accept(deletion())
+            self.settle()
+            self.relay.media_updated("42", "m1")
+            self.settle()
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(self.store.db.execute("SELECT status FROM telegram_attempts").fetchone()[0], "failed")
+        report = " ".join(self.reports)
+        self.assertIn("method=sendMessage; status=400; reason=topic_missing", report)
+        self.assertIn("No automatic resend", report)
+        self.assertNotIn(TOKEN, report)
+        self.assertNotIn("PRIVATE_MESSAGE", report)
+
+    def test_error_bodies_are_bounded_and_unrecognized_text_is_not_echoed(self):
+        class BoundedBody(io.BytesIO):
+            def read(self, size=-1):
+                self.requested_size = size
+                return super().read(size)
+        for raw in (b"PRIVATE_MESSAGE " + TOKEN.encode(),
+                    b'{"description":"message thread not found"}' + b" " * ERROR_RESPONSE_BYTES):
+            body = BoundedBody(raw)
+            error = HTTPError("https://api.telegram.org/bot" + TOKEN, 400, "PRIVATE_MESSAGE", None, body)
+            with patch("telegram_relay.urlopen", side_effect=error), self.assertRaises(TelegramRejected) as caught:
+                self.relay._api("PRIVATE_METHOD_" + TOKEN, {})
+            self.assertEqual(body.requested_size, ERROR_RESPONSE_BYTES + 1)
+            self.assertEqual(caught.exception.details,
+                             "method=unknown; status=400; reason=request_rejected")
+            self.assertTrue(body.closed)
+
+    def test_network_failures_are_classified_without_echoing_exception_text(self):
+        for cause, reason in ((socket.gaierror("PRIVATE_MESSAGE " + TOKEN), "dns_error"),
+                              (ssl.SSLError("PRIVATE_MESSAGE " + TOKEN), "tls_error"),
+                              (TimeoutError("PRIVATE_MESSAGE " + TOKEN), "timeout"),
+                              ("PRIVATE_MESSAGE " + TOKEN, "connection_error")):
+            with self.subTest(reason=reason), patch("telegram_relay.urlopen", side_effect=URLError(cause)), self.assertRaises(TelegramRequestError) as caught:
+                self.relay._api("sendDocument", {})
+            self.assertNotIsInstance(caught.exception, TelegramRejected)
+            self.assertEqual(str(caught.exception),
+                             "method=sendDocument; status=unknown; reason=" + reason)
+        with patch("telegram_relay.urlopen", side_effect=TimeoutError(TOKEN)), self.assertRaises(TelegramRequestError) as caught:
+            self.relay._api("sendMessage", {})
+        self.assertIn("reason=timeout", str(caught.exception))
+
+    def test_api_error_payloads_and_invalid_responses_keep_safe_diagnostics(self):
+        for raw, exception, details in (
+            (b'{"ok":false,"error_code":400,"description":"Bad Request: can\'t parse entities PRIVATE_MESSAGE"}',
+             TelegramRejected, "status=400; reason=invalid_entities"),
+            (b'{"ok":false,"error_code":502,"description":"PRIVATE_MESSAGE"}',
+             TelegramRequestError, "status=502; reason=server_error"),
+            (b'{"ok":false,"error_code":"PRIVATE_MESSAGE"}',
+             TelegramRequestError, "status=unknown; reason=invalid_response"),
+            (b'[]', TelegramRequestError, "status=unknown; reason=invalid_response"),
+            (b'PRIVATE_MESSAGE', TelegramRequestError, "status=unknown; reason=invalid_response_json"),
+            (b'\xff', TelegramRequestError, "status=unknown; reason=invalid_response_json"),
+            (b'x' * (1024 * 1024 + 1), TelegramRequestError, "status=unknown; reason=response_too_large"),
+        ):
+            with self.subTest(details=details), patch.object(Response, "read", return_value=raw), self.assertRaises(exception) as caught:
+                self.relay._api("sendMessage", {})
+            self.assertEqual(caught.exception.details, "method=sendMessage; " + details)
+            self.assertNotIn("PRIVATE_MESSAGE", str(caught.exception))
+
+    def test_summary_delivery_failures_use_the_same_redacted_details(self):
+        self.store.accept(message())
+        self.relay.mode = "all"
+        error = HTTPError("https://api.telegram.org/bot" + TOKEN, 403, "PRIVATE_MESSAGE", None,
+                          io.BytesIO(b'{"ok":false,"description":"Forbidden: bot was blocked by the user"}'))
+        with patch("telegram_relay.urlopen", side_effect=error):
+            self.accept({"type": "reaction", "timestamp": 1001001,
+                         "data": {"threadId": 42, "messageId": "m1", "reaction": "👍"}})
+            self.settle()
+        report = " ".join(self.reports)
+        self.assertIn("method=sendMessage; status=403; reason=bot_blocked", report)
+        self.assertNotIn(TOKEN, report)
+        self.assertNotIn("PRIVATE_MESSAGE", report)
+
+    def test_topic_creation_distinguishes_rejected_and_unconfirmed_outcomes(self):
+        router = TopicRouter(self.relay._api, self.store, "123456", "123456")
+        router.chat_id = "123456"
+        for thread_id, error, status in (
+            ("rejected", HTTPError("https://api.telegram.org/bot" + TOKEN, 400, "PRIVATE_MESSAGE", None,
+                                   io.BytesIO(b'{"ok":false,"description":"Bad Request"}')), None),
+            ("network", URLError(TimeoutError(TOKEN)), "unconfirmed"),
+            ("server", HTTPError("https://api.telegram.org/bot" + TOKEN, 502, "PRIVATE_MESSAGE", None,
+                                 io.BytesIO(b'PRIVATE_MESSAGE')), "unconfirmed"),
+        ):
+            with self.subTest(thread_id=thread_id), patch("telegram_relay.urlopen", side_effect=error), self.assertRaises(TopicError):
+                router.topic(thread_id, "Conversation")
+            mapping = self.store.telegram_topic("123456", "123456", thread_id)
+            self.assertEqual(mapping["status"] if mapping else None, status)
 
     def test_all_mode_preserves_regular_content_relay(self):
         self.relay.mode = "all"
