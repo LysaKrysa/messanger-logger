@@ -183,6 +183,12 @@ are not automatically resent. The existing topic-missing repair remains active.
 
 ## Operations and recovery
 
+To update an existing dashboard, run the installer from the desired source
+release with the same hostname. It preserves the master key, password, and
+configuration database. Restart each managed account from its dashboard page
+afterwards so its Python process loads the updated code. Existing certificates
+are preserved; renew or replace them separately when necessary.
+
 ```bash
 sudo systemctl status messenger-dashboard-web messenger-dashboard-bot messenger-dashboard-manager --no-pager
 sudo journalctl -u messenger-dashboard-manager -n 40 --no-pager

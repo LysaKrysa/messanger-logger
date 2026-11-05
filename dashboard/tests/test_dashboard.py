@@ -427,7 +427,8 @@ class MigrationTests(Base):
         def run(args, **kwargs):
             calls.append(args)
             return subprocess.CompletedProcess(args, 0)
-        with patch("dashboard.cli.verify_bot", return_value=BOT), patch("dashboard.cli.TelegramAPI.json", return_value={"id": 87654321, "type": "private"}), patch("dashboard.cli.os.geteuid", return_value=0):
+        with patch("dashboard.cli.verify_bot", return_value=BOT), patch("dashboard.cli.TelegramAPI.json", return_value={"id": 87654321, "type": "private"}), patch("dashboard.cli.os", wraps=os) as cli_os:
+            cli_os.geteuid.return_value = 0
             ident = import_existing(self.store, env, source, "My account", data_root=self.root / "accounts", runner=run)
         self.assertEqual(calls, [["systemctl", "is-active", "--quiet", "messenger-logger"], ["systemctl", "stop", "messenger-logger"], ["systemctl", "disable", "messenger-logger"]])
         self.assertEqual((self.root / "accounts" / ident / "data/synthetic-device-state").read_text(), "SYNTHETIC_DEVICE")
@@ -444,7 +445,8 @@ class MigrationTests(Base):
         def run(args, **kwargs):
             calls.append(args)
             return subprocess.CompletedProcess(args, 0)
-        with patch("dashboard.cli.verify_bot", return_value=BOT), patch("dashboard.cli.TelegramAPI.json", return_value={"id": 87654321, "type": "private"}), patch("dashboard.cli.os.geteuid", return_value=0), patch("dashboard.cli.shutil.copytree", side_effect=OSError("PRIVATE")), self.assertRaises(DashboardError) as caught:
+        with patch("dashboard.cli.verify_bot", return_value=BOT), patch("dashboard.cli.TelegramAPI.json", return_value={"id": 87654321, "type": "private"}), patch("dashboard.cli.os", wraps=os) as cli_os, patch("dashboard.cli.shutil.copytree", side_effect=OSError("PRIVATE")), self.assertRaises(DashboardError) as caught:
+            cli_os.geteuid.return_value = 0
             import_existing(self.store, env, source, "My account", data_root=self.root / "accounts", runner=run)
         self.assertIn(["systemctl", "enable", "--now", "messenger-logger"], calls)
         self.assertFalse(self.store.accounts()[0]["desired"])

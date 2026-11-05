@@ -62,7 +62,7 @@ def main():
                 page.get_by_role("button", name="Sign in").click()
                 page.wait_for_url(origin + "/")
                 page.screenshot(path=str(output / "desktop.png"), full_page=True)
-                page.get_by_role("link", name="＋ Add account").click()
+                page.get_by_role("link", name="Add account", exact=False).click()
                 page.get_by_label("Account label").fill("Jordan")
                 page.locator("#cookies").fill(json.dumps({"c_user": "444000887", "xs": "SYNTHETIC_BROWSER_PRIVATE", "datr": "SYNTHETIC_BROWSER_PRIVATE"}))
                 page.get_by_role("button", name="Create account").click()

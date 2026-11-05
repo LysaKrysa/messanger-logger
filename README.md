@@ -74,6 +74,10 @@ Git and Go **1.26.10**.
 
 ## Admin dashboard + one shared bot
 
+![Administrator dashboard with separate accounts and a shared Telegram bot](docs/assets/dashboard.png)
+
+*Dashboard preview with synthetic demo accounts.*
+
 The optional dashboard adds account setup, encrypted cookie storage, status,
 start/stop/restart controls, cookie replacement, and Telegram invitations. Each
 person receives notifications in their own private chat with the same bot;
