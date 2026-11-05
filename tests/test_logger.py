@@ -231,6 +231,85 @@ class RPCTests(TemporaryTest):
             self.assertIn("json_syntax", error)
             self.assertIn("bytes=", error)
             self.assertNotIn(SECRET, error)
+            self.assertFalse(bridge.failure.terminal)
+        finally:
+            bridge.close()
+
+    def test_122_byte_signal_diagnostic_does_not_stop_reader(self):
+        prefix = "[ERROR] 2026-01-02T03:04:05Z SessionCipher.go:123 ▶  ".encode()
+        raw = prefix + SECRET.encode()
+        raw += b"x" * (121 - len(raw)) + b"\n"
+        self.assertEqual(len(raw), 122)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            bridge = Bridge(fake_binary(self.root, preamble="os.write(1, " + repr(raw) + ")"), verify=False)
+            try:
+                bridge.check_contract()
+                bridge.call("connect")
+                self.assertEqual(bridge.events.get(timeout=1)["data"]["text"], "during startup")
+                self.assertIsNone(bridge.failure)
+                self.assertEqual(bridge.native_diagnostics, 1)
+            finally:
+                bridge.close()
+        self.assertIn("level=ERROR", output.getvalue())
+        self.assertNotIn(SECRET, output.getvalue())
+
+    def test_signal_log_levels_and_timezone_offsets_are_filtered(self):
+        for level, zone in (("INFO", "Z"), ("WARNING", "+01:00"), ("ERROR", "-05:30")):
+            with self.subTest(level=level), contextlib.redirect_stdout(io.StringIO()) as output:
+                line = "[" + level + "] 2026-01-02T03:04:05" + zone + " GroupCipher.go:42 ▶  " + SECRET
+                bridge = Bridge(fake_binary(self.root, preamble="print(" + repr(line) + ", flush=True)"), verify=False)
+                try:
+                    bridge.check_contract()
+                    self.assertIsNone(bridge.failure)
+                    self.assertEqual(bridge.native_diagnostics, 1)
+                finally:
+                    bridge.close()
+                self.assertNotIn(SECRET, output.getvalue())
+
+    def test_signal_log_between_event_and_rpc_reply_preserves_both(self):
+        line = "[WARNING] 2026-01-02T03:04:05Z SessionCipher.go:42 ▶  " + SECRET
+        binary = fake_binary(self.root)
+        source = binary.read_text()
+        old = "    print(json.dumps(response),flush=True)"
+        self.assertEqual(source.count(old), 1)
+        binary.write_text(source.replace(old, "    print(" + repr(line) + ",flush=True)\n" + old))
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            bridge = Bridge(binary, verify=False)
+            try:
+                bridge.check_contract()
+                bridge.call("connect")
+                self.assertTrue(bridge.call("isConnected")["connected"])
+                self.assertEqual(bridge.events.get(timeout=1)["data"]["text"], "during startup")
+                self.assertEqual(bridge.native_diagnostics, 3)
+                self.assertIsNone(bridge.failure)
+            finally:
+                bridge.close()
+        self.assertEqual(output.getvalue().count("Native Signal diagnostic"), 1)
+        self.assertNotIn(SECRET, output.getvalue())
+
+    def test_signal_log_text_inside_a_chat_message_is_preserved(self):
+        line = "[ERROR] 2026-01-02T03:04:05Z SessionCipher.go:42 ▶  synthetic chat text"
+        binary = fake_binary(self.root)
+        source = binary.read_text()
+        binary.write_text(source.replace("'text':'during startup'", "'text':" + repr(line)))
+        bridge = Bridge(binary, verify=False)
+        try:
+            bridge.check_contract()
+            bridge.call("connect")
+            self.assertEqual(bridge.events.get(timeout=1)["data"]["text"], line)
+            self.assertEqual(bridge.native_diagnostics, 0)
+            self.assertIsNone(bridge.failure)
+        finally:
+            bridge.close()
+
+    def test_unrecognized_bracketed_output_remains_a_retryable_failure(self):
+        line = "[ERROR] not-a-native-log " + SECRET
+        bridge = Bridge(fake_binary(self.root, preamble="print(" + repr(line) + ",flush=True)"), verify=False)
+        try:
+            error = self._await_reader_failure(bridge)
+            self.assertIn("json_syntax", error)
+            self.assertFalse(bridge.failure.terminal)
+            self.assertNotIn(SECRET, error)
         finally:
             bridge.close()
 
@@ -242,6 +321,7 @@ class RPCTests(TemporaryTest):
             self.assertIn("stage=event_filter", error)
             self.assertIn("content_data_not_object", error)
             self.assertIn("event=message", error)
+            self.assertTrue(bridge.failure.terminal)
             self.assertNotIn(SECRET, error)
         finally:
             bridge.close()
@@ -253,6 +333,7 @@ class RPCTests(TemporaryTest):
             error = self._await_reader_failure(bridge)
             self.assertIn("stage=envelope", error)
             self.assertIn("envelope_not_object", error)
+            self.assertTrue(bridge.failure.terminal)
             self.assertNotIn(SECRET, error)
         finally:
             bridge.close()
@@ -283,6 +364,7 @@ class RPCTests(TemporaryTest):
             error = self._await_reader_failure(bridge)
             self.assertIn("stage=json_decode", error)
             self.assertIn("invalid_encoding", error)
+            self.assertFalse(bridge.failure.terminal)
             self.assertNotIn(SECRET, error)
         finally:
             bridge.close()

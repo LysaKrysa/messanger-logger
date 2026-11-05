@@ -336,6 +336,11 @@ Authentication/checkpoint problems, invalid settings, account mismatches,
 incompatible binaries, and storage failures stop with status **78** for manual
 attention. The installer refuses to take over an unmanaged existing container.
 
+Known Signal-library diagnostic lines on native stdout are filtered without
+retaining their text. Other JSON/encoding failures stop the affected bridge
+with retryable exit status 1, allowing systemd to restart it. Structural protocol
+errors and authentication/configuration failures still require manual attention.
+
 The [server guide](SERVER_SETUP.md) covers installation, container-name conflicts,
 cookie refresh, source updates, service controls, and cleanup checks.
 
@@ -531,7 +536,7 @@ BRIDGE_TEST_BIN=/absolute/path/to/messenger-bridge \
   python3 -m unittest discover -s tests -v
 ```
 
-There are **146 checks** covering event filtering, future-only admission, deletion
+There are **151 checks** covering event filtering, future-only admission, deletion
 tracking, journal recovery, media integrity, names, Telegram formatting/topics,
 retention, and restart exit codes. [VALIDATION.md](VALIDATION.md) distinguishes
 offline checks from live-account/server behavior.

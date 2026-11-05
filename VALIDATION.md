@@ -1,16 +1,17 @@
 # Validation
 
-Offline checks completed on Linux amd64, 4 November 2026.
+Offline checks completed on Linux amd64, 5 November 2026.
 
 ## Current source tree
 
-- All **146 Python unit/integration checks passed** with the compatible native
+- All **151 Python unit/integration checks passed** with the compatible native
   binary supplied through `BRIDGE_TEST_BIN`.
 - Python syntax, Bash wrapper/installer syntax, SVG XML, workflow/template YAML,
   and relative Markdown document links were checked.
-- Copied Python and native Go implementation files match the tested deployment
-  revision byte for byte. Publication adds docs/config/license/CI files; the
-  Dockerfile additionally preserves license documents in the runtime image.
+- Native Go source and pinned binary hashes are unchanged. The Python reader
+  additionally filters the pinned Signal logger's exact diagnostic prefix and
+  makes JSON/encoding failures restartable. The runtime image includes license
+  documents; the hotfix also works through the existing full-source bind mount.
 - The source-only publication set excludes private configuration, cookies,
   tokens, messages, media, device state, databases, personal server addresses,
   SSH material, build caches, and compiled transport binaries.
@@ -45,6 +46,20 @@ No test sends a Messenger message or a Telegram notice. Most connection tests
 use a local synthetic RPC subprocess. The native test calls only credential-free
 local RPC methods.
 
+## Reader recovery regression
+
+A synthetic 122-byte Signal diagnostic reproduced the reported parser signature:
+JSON syntax failure at column 2 on a line beginning with a bracket. The new
+reader recognizes only the pinned DefaultLogger severity/timestamp/Go-caller
+prefix and continues to process subsequent events and RPC responses. Only a
+fixed severity notice is emitted, once per level; diagnostic text is not retained.
+
+Checks cover all emitted severities, UTC/offset timestamps, event/response
+interleaving, preservation of log-like text inside actual messages, and rejection
+of unrecognized bracketed output. Unrecognized JSON/encoding failures stop the
+reader with retryable exit 1; protocol shape errors remain terminal. Existing
+auth/checkpoint handling still exits 78 and does not repeatedly retry login.
+
 ## Native checks already completed for this exact source
 
 - Built `2.3.4-logger.1` for Linux amd64 and arm64 with verified Go 1.26.10.
@@ -68,7 +83,8 @@ The native source did not change during open-source preparation.
 - Live authentication, checkpoints, encrypted registration, full conversation
   coverage, attachment resolution/availability, or actual Telegram delivery.
 - Execution of the arm64 binary in the development environment.
-- CI results on GitHub: the workflow is prepared, not reported as already run.
+- CI results for your exact revision: inspect its GitHub Actions run; local
+  results and earlier successful CI runs are separate evidence.
 
 A user must test their own current session and destination after deployment.
 The project deliberately distinguishes local/offline checks from live-service

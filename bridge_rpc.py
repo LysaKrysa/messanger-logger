@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import platform
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -30,6 +31,14 @@ CONTENT_EVENTS = {
 CONTROL_EVENTS = {"ready", "reconnected", "disconnected", "error", "e2eeConnected"}
 # The pinned bridge caps downloads at 100 MiB; JSON carries them as base64.
 MAX_LINE = 144 * 1024 * 1024
+
+# libsignal v0.2.2's DefaultLogger prints this exact human-readable prefix to
+# stdout independently of the bridge's configured log level.
+SIGNAL_DIAGNOSTIC = re.compile(
+    rb"^\[(INFO|WARNING|ERROR)\] "
+    rb"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}) "
+    rb"[A-Za-z0-9_.-]+\.go:\d+ \xe2\x96\xb6  "
+)
 
 
 class BridgeFailure(RuntimeError):
@@ -169,6 +178,8 @@ class Bridge:
         self._next_id = 1
         self.stop_event = stop_event
         self.failure: BridgeFailure | None = None
+        self.native_diagnostics = 0
+        self._diagnostic_levels = set()
         child_env = {key: value for key, value in os.environ.items() if not key.startswith(("FB_", "TELEGRAM_"))}
         self.process = subprocess.Popen(
             [str(binary.resolve())], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -206,6 +217,14 @@ class Bridge:
                 stripped = raw.strip()
                 if not stripped:
                     # Blank separators contain no RPC response or event to lose.
+                    continue
+                diagnostic = SIGNAL_DIAGNOSTIC.match(raw)
+                if diagnostic is not None:
+                    level = diagnostic.group(1).decode("ascii")
+                    self.native_diagnostics += 1
+                    if level not in self._diagnostic_levels:
+                        self._diagnostic_levels.add(level)
+                        print("Native Signal diagnostic suppressed (level=" + level + "); provider text hidden. Listener continuing.", flush=True)
                     continue
                 record_format = "json_object" if stripped.startswith(b"{") else ("json_array" if stripped.startswith(b"[") else "non_json_prefix")
                 stage = "json_decode"
@@ -261,7 +280,8 @@ class Bridge:
                 "Messenger bridge output could not be processed "
                 f"(stage={stage}; category={category}; exception={exception_type}; "
                 f"event={event_kind}; bytes={len(raw)}; record={record_number}; "
-                f"format={record_format}{json_location}). Payload and exception text hidden.", terminal=not isinstance(exc, OSError)
+                f"format={record_format}{json_location}). Payload and exception text hidden.",
+                terminal=not isinstance(exc, (json.JSONDecodeError, UnicodeDecodeError, OSError))
             )
 
     def call(self, method: str, params=None, *, timeout=120) -> dict:
