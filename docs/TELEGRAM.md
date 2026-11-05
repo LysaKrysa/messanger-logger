@@ -72,7 +72,7 @@ best-effort interpretations of Telegram errors; an unfamiliar rejection stays
 
 | Reason | Next step |
 | :--- | :--- |
-| `topic_missing` | Check the conversation's local topic mapping and bind its correct existing topic as described below. |
+| `topic_missing` | A missing saved topic is repaired automatically once. If Telegram also rejects the replacement, bind a verified existing topic as described below. |
 | `topic_closed` | Reopen that topic in Telegram, then test a fresh event. |
 | `bot_blocked`, `bot_not_started` | Unblock the configured bot and open its chat with `/start`. |
 | `unauthorized`, `chat_not_found`, `permission_denied` | Check the bot token, destination, and permissions privately. |
@@ -84,6 +84,26 @@ best-effort interpretations of Telegram errors; an unfamiliar rejection stays
 Test with a **new** eligible event after correcting the cause. Restarting does
 not replay failed sends. Do not clear the attempt ledger to force a resend:
 an earlier ambiguous request may already have reached Telegram.
+
+## Missing topic recovery
+
+Telegram can reject a previously saved topic ID with HTTP 400 and a specific
+topic-not-found error. The logger replaces only that conversation's mapping,
+creates a replacement topic, and retries only the rejected request once. This
+applies to a text page or one media upload; already accepted pages and earlier
+messages are not replayed. Existing Telegram topics and messages are not deleted.
+
+The replacement is confirmed after a successful send. If its creation times
+out, the map stays `unconfirmed` and requires manual binding. If sending to the
+replacement times out, its ID stays `repair_pending`; the uncertain message is
+not resent, and a future eligible event can use that same ID. If Telegram also
+reports the replacement missing, its state becomes `missing` and further
+automatic creation is paused, including after a restart. Use the local bind
+command below to select a verified existing topic.
+
+Rate limits, formatting errors, blocked bots, and ambiguous network failures
+do not trigger topic replacement. Previously failed notification records are
+not replayed when installing this update; test with a fresh eligible event.
 
 Topic mappings are scoped by bot ID, destination chat ID, and Messenger
 conversation ID. Changing the destination creates a new map. Same-name

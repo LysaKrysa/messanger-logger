@@ -18,6 +18,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from event_store import EventStore
 from telegram_relay import TelegramRelay
+from telegram_format import message_card
 from telegram_topics import TopicRouter, TopicError, TelegramRejected, topic_title
 from check_telegram_topics import main as check_topics
 import contextlib
@@ -167,6 +168,22 @@ class TopicTests(unittest.TestCase):
         self.api.error = None
         self.assertGreater(self.router.topic("42", "Friends"), 0)
 
+    def test_stale_failure_does_not_overwrite_a_concurrent_manual_bind(self):
+        self.router.destination()
+        self.store.save_telegram_topic("123456", "7654321", "42", 555, "Verified topic")
+        self.assertEqual(self.router.replace_missing("42", 77, "Friends"), 555)
+        self.assertEqual(self.api.created, 0)
+
+    def test_repair_after_retention_uses_a_nonempty_title(self):
+        self.router.destination()
+        self.store.save_telegram_topic("123456", "7654321", "42", 77, "")
+        replacement = self.router.replace_missing("42", 77, "Friends")
+        mapping = self.store.telegram_topic("123456", "7654321", "42")
+        self.assertEqual(mapping["name"], "Friends")
+        self.assertEqual(mapping["status"], "repair_pending")
+        self.router.confirm("42", replacement)
+        self.assertEqual(self.store.telegram_topic("123456", "7654321", "42")["status"], "ready")
+
     def test_cancel_before_request_does_not_leave_an_ambiguous_mapping(self):
         self.api.error = InterruptedError()
         with self.assertRaises(InterruptedError):
@@ -280,6 +297,7 @@ class TopicRelayTests(unittest.TestCase):
         self.env.start()
         self.api = API()
         self.calls, self.reports = [], []
+        self.delivery_hook = None
         self.mock = patch("telegram_relay.urlopen", side_effect=self.fake_open)
         self.mock.start()
         self.relay = TelegramRelay(self.reports.append, self.store)
@@ -297,10 +315,30 @@ class TopicRelayTests(unittest.TestCase):
         self.calls.append((request, body))
         method = request.full_url.rsplit("/", 1)[-1]
         if method == "sendDocument":
+            fields = self.multipart_fields(request, body)
+            params = {"message_thread_id": int(fields["message_thread_id"])} if "message_thread_id" in fields else {}
             result = {"message_id": 9}
         else:
-            result = self.api(method, json.loads(body))
+            params = json.loads(body)
+            result = None
+        if self.delivery_hook:
+            response = self.delivery_hook(method, params)
+            if response is not None:
+                return Response(response)
+        if method != "sendDocument":
+            result = self.api(method, params)
         return Response({"ok": True, "result": result})
+
+    @staticmethod
+    def multipart_fields(request, body):
+        multipart = BytesParser(policy=default).parsebytes(("MIME-Version: 1.0\r\nContent-Type: " + request.get_header("Content-type") + "\r\n\r\n").encode() + body)
+        return {part.get_param("name", header="content-disposition"): part.get_payload(decode=True) for part in multipart.iter_parts()}
+
+    def missing_topic(self):
+        return {"ok": False, "error_code": 400, "description": "Bad Request: message thread not found PRIVATE " + TOKEN}
+
+    def seed_stale_topic(self):
+        self.store.save_telegram_topic("123456", "7654321", "42", 77, "Friends")
 
     def accept(self, event):
         summary = self.store.accept(event)
@@ -365,6 +403,165 @@ class TopicRelayTests(unittest.TestCase):
 
     def test_no_topics_are_created_merely_by_starting_logger(self):
         self.assertEqual(self.calls, [])
+
+    def test_missing_topic_is_replaced_for_only_the_rejected_conversation(self):
+        self.seed_stale_topic()
+        self.relay.mode = "deleted"
+        self.store.save_telegram_topic("123456", "7654321", "43", 88, "Work")
+        self.store.save_telegram_topic("999999", "7654321", "42", 99, "Another bot")
+        self.delivery_hook = lambda method, params: self.missing_topic() if method == "sendMessage" and params["message_thread_id"] == 77 else None
+        self.accept(message())
+        self.accept(deletion())
+        self.settle()
+        self.assertEqual([item["message_thread_id"] for item in self.sends()], [77, 101])
+        self.assertEqual(self.api.created, 1)
+        self.assertEqual(self.store.telegram_topic("123456", "7654321", "42")["status"], "ready")
+        self.assertEqual(self.store.telegram_topic("123456", "7654321", "43")["topic_id"], 88)
+        self.assertEqual(self.store.telegram_topic("999999", "7654321", "42")["topic_id"], 99)
+        self.assertEqual(self.store.db.execute("SELECT status FROM telegram_attempts").fetchone()[0], "sent")
+        self.assertIn("missing topic replaced", " ".join(self.reports))
+        self.assertNotIn(TOKEN, " ".join(self.reports))
+        self.assertNotIn("PRIVATE", " ".join(self.reports))
+        self.assertFalse(any("delete" in request.full_url.rsplit("/", 1)[-1].lower() for request, _ in self.calls))
+
+    def test_topic_repair_does_not_repeat_successful_text_pages(self):
+        self.seed_stale_topic()
+        received, accepted = [], []
+        def hook(method, params):
+            if method != "sendMessage":
+                return None
+            received.append(params)
+            if len(received) == 2:
+                return self.missing_topic()
+            accepted.append(params)
+        self.delivery_hook = hook
+        event = message()
+        event["data"]["text"] = "🙂 long literal text " * 600
+        self.accept(event)
+        self.settle()
+        expected = message_card(self.store.relay_snapshot("42", "m1"), self.relay.zone).text
+        self.assertEqual("".join(item["text"] for item in accepted), expected)
+        self.assertEqual(received[1]["text"], received[2]["text"])
+        self.assertEqual([item["message_thread_id"] for item in received[:3]], [77, 77, 101])
+        self.assertEqual(self.api.created, 1)
+
+    def test_summary_notice_can_repair_topic_without_replaying_original(self):
+        self.seed_stale_topic()
+        self.accept(message())
+        self.settle()
+        self.delivery_hook = lambda method, params: self.missing_topic() if method == "sendMessage" and params["message_thread_id"] == 77 else None
+        self.accept({"type": "reaction", "timestamp": 1001001,
+                     "data": {"threadId": 42, "messageId": "m1", "reaction": "👍"}})
+        self.settle()
+        sends = self.sends()
+        self.assertEqual([item["message_thread_id"] for item in sends], [77, 77, 101])
+        self.assertEqual(sends[1]["text"], sends[2]["text"])
+        self.assertNotEqual(sends[0]["text"], sends[2]["text"])
+        self.assertEqual(self.api.created, 1)
+
+    def test_rejected_upload_is_rewound_and_rebuilt_for_replacement_topic(self):
+        self.seed_stale_topic()
+        self.accept(message(attachments=[{"type": "image"}]))
+        self.settle()
+        path = self.root / "media/test.png"
+        path.parent.mkdir()
+        path.write_bytes(PNG)
+        self.store.update_media("42", "m1", 0, {"downloadStatus": "saved", "localPath": "media/test.png", "savedBytes": len(PNG), "sha256": hashlib.sha256(PNG).hexdigest()})
+        self.delivery_hook = lambda method, params: self.missing_topic() if method == "sendDocument" and params["message_thread_id"] == 77 else None
+        self.relay.media_updated("42", "m1")
+        self.settle()
+        uploads = [(request, body) for request, body in self.calls if request.full_url.endswith("/sendDocument")]
+        self.assertEqual(len(uploads), 2)
+        fields = [self.multipart_fields(request, body) for request, body in uploads]
+        self.assertEqual([item["message_thread_id"] for item in fields], [b"77", b"101"])
+        self.assertEqual([item["document"] for item in fields], [PNG, PNG])
+        self.assertTrue(all(int(request.get_header("Content-length")) == len(body) for request, body in uploads))
+        self.assertEqual(len(self.sends()), 1)
+        self.assertEqual([row[0] for row in self.store.db.execute("SELECT status FROM telegram_attempts")], ["sent", "sent"])
+
+    def test_network_failure_does_not_change_mapping_or_resend(self):
+        self.seed_stale_topic()
+        def hook(method, params):
+            if method == "sendMessage":
+                raise TimeoutError("PRIVATE " + TOKEN)
+        self.delivery_hook = hook
+        self.accept(message())
+        self.settle()
+        self.delivery_hook = None
+        self.relay.media_updated("42", "m1")
+        self.settle()
+        self.assertEqual(len(self.sends()), 1)
+        self.assertEqual(self.api.created, 0)
+        self.assertEqual(self.store.telegram_topic("123456", "7654321", "42")["topic_id"], 77)
+        self.assertEqual(self.store.db.execute("SELECT status FROM telegram_attempts").fetchone()[0], "failed")
+        self.assertNotIn(TOKEN, " ".join(self.reports))
+
+    def test_unrelated_rejection_does_not_replace_topic(self):
+        self.seed_stale_topic()
+        self.delivery_hook = lambda method, params: {"ok": False, "error_code": 400, "description": "Bad Request: can't parse entities"} if method == "sendMessage" else None
+        self.accept(message())
+        self.settle()
+        self.assertEqual(len(self.sends()), 1)
+        self.assertEqual(self.api.created, 0)
+        self.assertEqual(self.store.telegram_topic("123456", "7654321", "42")["topic_id"], 77)
+        self.assertIn("reason=invalid_entities", " ".join(self.reports))
+
+    def test_missing_replacement_is_not_recreated_repeatedly_or_after_restart(self):
+        self.seed_stale_topic()
+        self.delivery_hook = lambda method, params: self.missing_topic() if method == "sendMessage" else None
+        self.accept(message())
+        self.settle()
+        self.assertEqual(len(self.sends()), 2)
+        self.assertEqual(self.api.created, 1)
+        self.assertEqual(self.store.telegram_topic("123456", "7654321", "42")["status"], "missing")
+        self.relay.topics = TopicRouter(self.relay._api, self.store, "123456", "7654321")
+        self.accept(message("m2"))
+        self.settle()
+        self.assertEqual(len(self.sends()), 2)
+        self.assertEqual(self.api.created, 1)
+        self.assertIn("Automatic repair is paused", " ".join(self.reports))
+        self.store.save_telegram_topic("123456", "7654321", "42", 555, "Verified topic")
+        self.delivery_hook = None
+        self.accept(message("m3"))
+        self.settle()
+        self.assertEqual(self.sends()[-1]["message_thread_id"], 555)
+
+    def test_ambiguous_replacement_creation_keeps_unconfirmed_state(self):
+        self.seed_stale_topic()
+        def hook(method, params):
+            if method == "sendMessage":
+                return self.missing_topic()
+            if method == "createForumTopic":
+                raise TimeoutError("PRIVATE " + TOKEN)
+        self.delivery_hook = hook
+        self.accept(message())
+        self.settle()
+        self.assertEqual(self.store.telegram_topic("123456", "7654321", "42")["status"], "unconfirmed")
+        self.accept(message("m2"))
+        self.settle()
+        self.assertEqual(len(self.sends()), 1)
+        self.assertEqual(sum(request.full_url.endswith("/createForumTopic") for request, _ in self.calls), 1)
+        self.assertNotIn(TOKEN, " ".join(self.reports))
+
+    def test_uncertain_send_to_replacement_reuses_it_for_future_events(self):
+        self.seed_stale_topic()
+        def hook(method, params):
+            if method == "sendMessage":
+                if params["message_thread_id"] == 77:
+                    return self.missing_topic()
+                raise TimeoutError("PRIVATE " + TOKEN)
+        self.delivery_hook = hook
+        self.accept(message())
+        self.settle()
+        self.assertEqual(self.store.telegram_topic("123456", "7654321", "42")["status"], "repair_pending")
+        self.delivery_hook = None
+        self.relay.topics = TopicRouter(self.relay._api, self.store, "123456", "7654321")
+        self.accept(message("m2"))
+        self.settle()
+        self.assertEqual([item["message_thread_id"] for item in self.sends()], [77, 101, 101])
+        self.assertEqual(self.api.created, 1)
+        self.assertEqual(self.store.telegram_topic("123456", "7654321", "42")["status"], "ready")
+        self.assertEqual([row[0] for row in self.store.db.execute("SELECT status FROM telegram_attempts")], ["failed", "sent"])
 
     def test_username_destination_is_resolved_and_sends_use_verified_numeric_id(self):
         self.relay.topics.requested_chat = "@example_destination"

@@ -81,10 +81,12 @@ class TopicRouter:
         mapping = self.store.telegram_topic(self.bot_id, self.chat_id, thread_id)
         fallback = not display_label(name) or name in {"Unnamed conversation", "Unknown participant"}
         if mapping:
-            if mapping["status"] != "ready" or not mapping["topic_id"]:
+            if mapping["status"] == "missing":
+                raise TopicError("Telegram rejected the replacement topic too. Automatic repair is paused; use manage-topics to bind a verified existing topic.")
+            if mapping["status"] not in {"ready", "repair_pending"} or not mapping["topic_id"]:
                 raise TopicError("A topic creation was unconfirmed. Use manage-topics to bind its existing Telegram topic before retrying.")
             # Improve an initially unknown conversation label once a name arrives.
-            if mapping["is_fallback"] and not fallback:
+            if mapping["is_fallback"] and not fallback and mapping["status"] == "ready":
                 title = self.unique_title(name)
                 try:
                     self.api("editForumTopic", {"chat_id": self.chat_id, "message_thread_id": mapping["topic_id"], "name": title})
@@ -96,6 +98,24 @@ class TopicRouter:
         title = self.unique_title("Unmatched messages" if thread_id == "unresolved" else name)
         if not self.store.reserve_telegram_topic(self.bot_id, self.chat_id, thread_id, title, fallback):
             raise TopicError("Another topic creation is in progress; local content is saved.")
+        return self._create_reserved(thread_id, title, fallback)
+
+    def replace_missing(self, thread_id, topic_id, name):
+        """Replace only the mapping used by a definitively rejected request."""
+        mapping = self.store.telegram_topic(self.bot_id, self.chat_id, thread_id)
+        if mapping and mapping["topic_id"] == topic_id and mapping["status"] == "repair_pending":
+            self.store.finish_telegram_topic_repair(self.bot_id, self.chat_id, thread_id, topic_id, missing=True)
+            raise TopicError("Telegram rejected the replacement topic too. Automatic repair is paused; use manage-topics to bind a verified existing topic.")
+        if mapping and self.store.begin_telegram_topic_repair(self.bot_id, self.chat_id, thread_id, topic_id):
+            title = mapping["name"] or self.unique_title(name)
+            return self._create_reserved(thread_id, title, mapping["is_fallback"], repair=True)
+        # A concurrent local bind/repair must not be overwritten.
+        return self.topic(thread_id, name)
+
+    def confirm(self, thread_id, topic_id, *, missing=False):
+        self.store.finish_telegram_topic_repair(self.bot_id, self.chat_id, thread_id, topic_id, missing=missing)
+
+    def _create_reserved(self, thread_id, title, fallback, *, repair=False):
         try:
             color = COLORS[hashlib.sha256(thread_id.encode()).digest()[0] % len(COLORS)]
             result = self.api("createForumTopic", {"chat_id": self.chat_id, "name": title, "icon_color": color})
@@ -112,7 +132,8 @@ class TopicRouter:
         if not isinstance(topic_id, int) or isinstance(topic_id, bool) or topic_id <= 0:
             self.store.unconfirmed_telegram_topic(self.bot_id, self.chat_id, thread_id)
             raise TopicError("Telegram did not return a usable topic ID. Use manage-topics to bind it.")
-        self.store.save_telegram_topic(self.bot_id, self.chat_id, thread_id, topic_id, title, fallback)
+        self.store.save_telegram_topic(self.bot_id, self.chat_id, thread_id, topic_id, title, fallback,
+                                       status="repair_pending" if repair else "ready")
         return topic_id
 
 
