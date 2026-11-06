@@ -28,10 +28,11 @@
     $("step-welcome").classList.add("current"); $("step-facebook").classList.remove("current"); $("step-telegram").classList.remove("current");
   });
   async function api(action, body, anonymous = false) {
-    const response = await fetch("/setup/api/" + action, {method: body === undefined ? "GET" : "POST", credentials: "same-origin", cache: "no-store", headers: {"Content-Type": "application/json", ...(anonymous ? {} : {"X-Setup-CSRF": csrf})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
+    const auth = csrf;
+    const response = await fetch("/setup/api/" + action, {method: body === undefined ? "GET" : "POST", credentials: "same-origin", cache: "no-store", headers: {"Content-Type": "application/json", ...(anonymous ? {} : {"X-Setup-CSRF": auth})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
     const data = await response.json();
     if (!response.ok) {
-      if (response.status === 401) { active = false; finished = true; stopView(); resetInput(); $("remote-screen").hidden = true; }
+      if (response.status === 401 && auth === csrf) { active = false; finished = true; stopView(); resetInput(); $("remote-screen").hidden = true; showError(data.error || "This setup session has expired or was disabled. Ask for a new invitation."); }
       throw new Error(data.error || "Setup could not continue. Please try again.");
     }
     return data;

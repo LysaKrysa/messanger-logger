@@ -49,7 +49,7 @@ def verify(browser, admin, origin, store, offline, output):
     guest.get_by_role("button", name="Continue to Facebook").click()
     guest.get_by_role("button", name="Open Facebook", exact=False).click()
     guest.locator("#remote-screen").wait_for(state="visible")
-    guest.wait_for_function("document.getElementById('remote-screen').naturalWidth > 0")
+    guest.wait_for_function("() => document.getElementById('remote-screen').naturalWidth > 0")
     count_frames = lambda: sum(action == "frame" and not (data or {}).get("metadata_only") for _, action, data in offline.calls)
     before = count_frames()
     guest.wait_for_timeout(900)
@@ -60,7 +60,7 @@ def verify(browser, admin, origin, store, offline, output):
     guest.wait_for_timeout(300)
     assert count_frames() == paused, "Hidden viewer continued capturing frames"
     guest.evaluate("Object.defineProperty(document, 'hidden', {configurable:true, get:()=>false}); document.dispatchEvent(new Event('visibilitychange'))")
-    guest.wait_for_function("document.getElementById('remote-screen').naturalWidth > 0")
+    guest.wait_for_function("() => document.getElementById('remote-screen').naturalWidth > 0")
     guest.locator("#remote-typing").fill("SYNTHETIC_REMOTE_INPUT")
     guest.set_viewport_size({"width": 1280, "height": 1100})
     guest.screenshot(path=str(output / "guest-browser.png"), full_page=True)
