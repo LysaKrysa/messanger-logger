@@ -1,5 +1,18 @@
 # Validation
 
+## Remote browser responsiveness
+
+- Live-view tests cover binary JPEG streaming, no-cache/same-origin headers,
+  guest authorization, active revocation/expiry, and bounded stream concurrency.
+- Input tests cover bounded batches, validation before dispatch, Unicode,
+  slow-connection ordering, rapid text/wheel coalescing, no ambiguous resend,
+  and clearing pending input across invitation changes.
+- The HTTPS guest test verifies multiple frames per second, hidden-tab pause
+  and resume, and the existing approval and Telegram handoff.
+- The real offline browser check verifies batched input, metadata without images,
+  and times direct compositor capture while retaining the sandbox/proxy checks.
+- All fixtures remain synthetic; no Facebook login or real Telegram send.
+
 ## Self-service setup links
 
 - Synthetic tests cover atomic one-time claims, consent, origin/CSRF checks,

@@ -15,6 +15,7 @@ import time
 from urllib.parse import urlsplit
 
 from playwright.sync_api import sync_playwright
+from events import normalize
 
 HOSTS = ("facebook.com", "facebook.net", "fbcdn.net", "fbsbx.com", "messenger.com")
 COOKIE_NAMES = {"c_user", "xs", "datr", "fr", "sb", "wd", "presence", "ps_l", "ps_n"}
@@ -65,6 +66,21 @@ def main():
         context.route("**/*", lambda route: route.continue_() if allowed(route.request.url) else route.abort())
         page = context.new_page()
         context.set_default_timeout(10000)
+        capture_page, capture_session = None, None
+        ready, checked_at = False, 0.0
+
+        def apply_input(event):
+            action = event["action"]
+            if action == "click":
+                page.mouse.click(max(0, min(page.viewport_size["width"] - 1, event["x"])), max(0, min(page.viewport_size["height"] - 1, event["y"])))
+            elif action == "text":
+                page.keyboard.insert_text(event["text"])
+            elif action == "key":
+                page.keyboard.press(event["key"])
+            elif action == "scroll":
+                page.mouse.wheel(0, event["delta"])
+            elif action == "reload":
+                page.reload(wait_until="domcontentloaded", timeout=20000)
         for line in sys.stdin:
             request_id = None
             try:
@@ -93,29 +109,33 @@ def main():
                     page.goto("https://fixture.facebook.com/", wait_until="domcontentloaded", timeout=10000)
                     result = {"title": page.title()}
                 elif action == "frame":
-                    cookies = {c["name"]: c["value"] for c in context.cookies(["https://www.facebook.com/"]) if c["name"] in COOKIE_NAMES}
-                    result = {"jpeg": base64.b64encode(page.screenshot(type="jpeg", quality=65, timeout=10000)).decode(),
-                              "site": urlsplit(page.url).hostname or "Starting browser", "width": page.viewport_size["width"], "height": page.viewport_size["height"], "ready": all(cookies.get(k) for k in ("c_user", "xs", "datr"))}
-                elif action == "click":
-                    page.mouse.click(max(0, min(page.viewport_size["width"] - 1, float(item["x"]))), max(0, min(page.viewport_size["height"] - 1, float(item["y"]))))
+                    now = time.monotonic()
+                    if now - checked_at >= 0.8:
+                        cookies = {c["name"]: c["value"] for c in context.cookies(["https://www.facebook.com/"]) if c["name"] in COOKIE_NAMES}
+                        ready = all(cookies.get(k) for k in ("c_user", "xs", "datr"))
+                        checked_at = now
+                    result = {"site": urlsplit(page.url).hostname or "Starting browser", "width": page.viewport_size["width"], "height": page.viewport_size["height"], "ready": ready}
+                    if item.get("metadata_only") is not True:
+                        if capture_page is not page:
+                            if capture_session is not None:
+                                try:
+                                    capture_session.detach()
+                                except Exception:
+                                    pass
+                            capture_session = context.new_cdp_session(page)
+                            capture_page = page
+                        # Direct compositor capture avoids per-frame font/stability
+                        # waits in the general screenshot helper. Nothing is saved.
+                        result["jpeg"] = capture_session.send("Page.captureScreenshot", {
+                            "format": "jpeg", "quality": 65, "fromSurface": True,
+                            "captureBeyondViewport": False, "optimizeForSpeed": True,
+                        })["data"]
+                elif action == "input":
+                    for event in normalize(item.get("events")):
+                        apply_input(event)
                     result = {}
-                elif action == "text":
-                    text = item["text"]
-                    if not isinstance(text, str) or len(text) > 2000:
-                        raise ValueError
-                    page.keyboard.insert_text(text)
-                    result = {}
-                elif action == "key":
-                    key = item["key"]
-                    if key not in {"Backspace", "Delete", "Enter", "Tab", "Shift+Tab", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown", "Control+A"}:
-                        raise ValueError
-                    page.keyboard.press(key)
-                    result = {}
-                elif action == "scroll":
-                    page.mouse.wheel(0, max(-768, min(768, float(item["delta"]))))
-                    result = {}
-                elif action == "reload":
-                    page.reload(wait_until="domcontentloaded", timeout=20000)
+                elif action in {"click", "text", "key", "scroll", "reload"}:
+                    apply_input(normalize([item])[0])
                     result = {}
                 elif action == "capture":
                     if not allowed(page.url) or any(part in urlsplit(page.url).path.lower() for part in ("login", "checkpoint", "recover")):

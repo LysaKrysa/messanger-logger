@@ -11,7 +11,7 @@ import time
 LABEL = "messenger.setup.managed"
 IMAGE = "messenger-onboarding:browser"
 IDENT = re.compile(r"[a-f0-9]{32}\Z")
-ACTIONS = {"open", "frame", "click", "text", "key", "scroll", "reload", "capture"}
+ACTIONS = {"open", "frame", "input", "click", "text", "key", "scroll", "reload", "capture"}
 
 class BrowserError(ValueError):
     pass
@@ -66,7 +66,7 @@ class DockerBrowser:
                 if self.process.poll() is not None:
                     raise ValueError
                 self.sequence += 1
-                raw = json.dumps({**(data or {}), "action": action, "id": self.sequence}).encode() + b"\n"
+                raw = json.dumps({**(data or {}), "action": action, "id": self.sequence}, ensure_ascii=False).encode() + b"\n"
                 if len(raw) > 16000:
                     raise ValueError
                 self.process.stdin.write(raw)
