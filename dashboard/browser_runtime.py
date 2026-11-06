@@ -58,7 +58,7 @@ class DockerBrowser:
             pass
 
     def call(self, action, data=None):
-        if action not in ACTIONS | {"smoke", "smoke-check"}:
+        if action not in ACTIONS | {"smoke", "smoke-check", "smoke-network"}:
             raise BrowserError("This browser action is unavailable.")
         with self.lock:
             try:

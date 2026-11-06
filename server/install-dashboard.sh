@@ -27,12 +27,12 @@ PY
 command -v docker >/dev/null
 docker image inspect messenger-logger:modern >/dev/null
 docker run --rm --network none --mount "type=bind,source=$LOGGER_SOURCE_DIR,target=/app,readonly" messenger-logger:modern --self-test
+apt-get update
+apt-get install -y python3-venv openssl
 # Fail before changing a working dashboard if this host cannot run the
 # sandboxed browser. The smoke check uses synthetic HTML and no external login.
 docker build --tag messenger-onboarding:browser "$LOGGER_SOURCE_DIR/browser"
 python3 "$LOGGER_SOURCE_DIR/browser/check_container.py"
-apt-get update
-apt-get install -y python3-venv openssl
 if ! id messenger-dashboard >/dev/null 2>&1; then
   useradd --system --user-group --home-dir /var/lib/messenger-dashboard --shell /usr/sbin/nologin messenger-dashboard
 fi

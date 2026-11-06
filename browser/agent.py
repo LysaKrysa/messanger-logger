@@ -51,7 +51,7 @@ def main():
         browser = playwright.chromium.launch(executable_path="/usr/bin/chromium", headless=True, chromium_sandbox=True,
             proxy={"server": "http://127.0.0.1:" + str(tunnel.server_address[1])},
             args=["--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"])
-        context = browser.new_context(viewport={"width": 1024, "height": 768}, accept_downloads=False, service_workers="block")
+        context = browser.new_context(viewport={"width": 1024, "height": 768}, accept_downloads=False, service_workers="block", ignore_https_errors="--offline-check" in sys.argv)
         context.route("**/*", lambda route: route.continue_() if allowed(route.request.url) else route.abort())
         page = context.new_page()
         context.set_default_timeout(10000)
@@ -79,6 +79,9 @@ def main():
                     result = {"sandboxed": True, "title": page.title()}
                 elif action == "smoke-check" and page.title() == "Offline browser fixture":
                     result = {"input": page.locator("input").input_value()}
+                elif action == "smoke-network" and "--offline-check" in sys.argv:
+                    page.goto("https://fixture.facebook.com/", wait_until="domcontentloaded", timeout=10000)
+                    result = {"title": page.title()}
                 elif action == "frame":
                     cookies = {c["name"]: c["value"] for c in context.cookies(["https://www.facebook.com/"]) if c["name"] in COOKIE_NAMES}
                     result = {"jpeg": base64.b64encode(page.screenshot(type="jpeg", quality=65, timeout=10000)).decode(),
