@@ -5,6 +5,15 @@
   let invitation = location.hash.slice(1);
   const showError = text => { $("setup-error").textContent = text; $("setup-error").hidden = false; };
   const hideError = () => { $("setup-error").hidden = true; };
+  addEventListener("hashchange", () => {
+    const next = location.hash.slice(1);
+    if (!next) return;
+    invitation = next; csrf = ""; active = false; finished = false; ready = false;
+    hideError(); $("claim-form").reset();
+    $("welcome").hidden = false; $("facebook").hidden = true; $("telegram").hidden = true;
+    $("remote-screen").hidden = true; $("remote-placeholder").hidden = false;
+    $("step-welcome").classList.add("current"); $("step-facebook").classList.remove("current"); $("step-telegram").classList.remove("current");
+  });
   async function api(action, body, anonymous = false) {
     const response = await fetch("/setup/api/" + action, {method: body === undefined ? "GET" : "POST", credentials: "same-origin", cache: "no-store", headers: {"Content-Type": "application/json", ...(anonymous ? {} : {"X-Setup-CSRF": csrf})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
     const data = await response.json();
@@ -28,7 +37,7 @@
     }
   }
   async function status() {
-    try { progress(await api("status")); } catch (error) { if (!invitation) showError(error.message); }
+    try { const data = await api("status"); if (!invitation) progress(data); } catch (error) { if (!invitation) showError(error.message); }
   }
   $("claim-form").addEventListener("submit", async event => {
     event.preventDefault(); hideError(); $("claim-button").disabled = true;
@@ -78,6 +87,10 @@
     if (event.isComposing) return;
     const text = event.target.value; event.target.value = "";
     if (text) input({action: "text", text});
+  });
+  $("remote-typing").addEventListener("beforeinput", event => {
+    const key = ({deleteContentBackward: "Backspace", deleteContentForward: "Delete", insertLineBreak: "Enter", insertParagraph: "Enter"})[event.inputType];
+    if (key) { event.preventDefault(); input({action: "key", key}); }
   });
   $("remote-typing").addEventListener("compositionend", event => { const text = event.target.value; event.target.value = ""; if (text) input({action: "text", text}); });
   $("remote-screen").addEventListener("wheel", event => { if (active) { event.preventDefault(); input({action: "scroll", delta: event.deltaY}); } }, {passive: false});

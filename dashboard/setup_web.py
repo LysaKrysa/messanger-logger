@@ -101,9 +101,14 @@ def install(app, store, origin, browser=None):
 
     @guest.post("/setup/api/start")
     def start():
-        _, row = live_session()
+        token, row = live_session()
         data = request.get_json(silent=True) or {}
         browser.call(row["id"], "start", {"expires": row["session_expires"], "mobile": isinstance(data, dict) and data.get("mobile") is True})
+        if invitations.session(token) is None:
+            try:
+                browser.call(row["id"], "stop")
+            finally:
+                raise DashboardError("This invitation was disabled or expired while the browser was starting.")
         return jsonify(started=True)
 
     @guest.post("/setup/api/frame")

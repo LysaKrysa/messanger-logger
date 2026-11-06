@@ -126,6 +126,10 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(self.browser.calls[-1][1], "stop")
         self.assertNotIn(COOKIES["xs"], result.text)
         self.assertNotIn(COOKIES["xs"], self.store.path.read_bytes().decode(errors="ignore"))
+        with self.store.db() as db:
+            dump = "\n".join(db.iterdump())
+        self.assertNotIn(COOKIES["xs"], dump)
+        self.assertNotIn(link, dump)
         row = self.store.accounts(private=True)[0]
         self.assertEqual(row["name"], "Alex")
         self.assertEqual(self.store.unseal("cookies:" + row["id"], row["cookies"]), COOKIES)
@@ -187,6 +191,17 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(self.post("finish", {"approve": True}, state).status_code, 400)
         self.assertEqual(self.store.accounts(), [])
 
+    def test_revocation_racing_with_start_stops_the_new_browser(self):
+        state = self.claim()
+        def start(ident, action, data=None):
+            self.browser.calls.append((ident, action, data))
+            if action == "start":
+                self.invites.revoke(ident)
+            return {"started": True}
+        self.browser.call = start
+        self.assertEqual(self.post("start", {}, state).status_code, 400)
+        self.assertEqual([call[1] for call in self.browser.calls], ["start", "stop"])
+
     def test_completed_link_disable_revokes_unused_telegram_invite_but_preserves_account(self):
         state = self.claim()
         result = self.post("finish", {"approve": True}, state).json
@@ -202,6 +217,17 @@ class SetupTests(unittest.TestCase):
         self.invites.revoke(ident)
         self.invites.create()
         self.assertEqual(sum(row["active"] for row in self.invites.list()), 1)
+
+    def test_all_active_links_remain_visible_beyond_the_history_limit(self):
+        self.store.max_accounts = 2
+        oldest, _ = self.invites.create("Keep this active")
+        for _ in range(105):
+            ident, _ = self.invites.create()
+            self.invites.revoke(ident)
+        rows = self.invites.list()
+        self.assertEqual(len(rows), 100)
+        self.assertEqual(rows[0]["id"], oldest)
+        self.assertTrue(rows[0]["active"])
 
     def test_admin_list_requires_admin_login_and_can_disable_links(self):
         self.assertEqual(self.client.get("/setup-links", base_url=ORIGIN).status_code, 302)

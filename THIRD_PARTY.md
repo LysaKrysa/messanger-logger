@@ -6,6 +6,9 @@
 Playwright v1.64.1, under Apache-2.0. Source:
 https://github.com/microsoft/playwright/blob/v1.64.1/utils/docker/seccomp_profile.json
 The license is included in `LICENSES/Apache-2.0.txt`.
+The policy additionally allows Chromium's sandbox `chroot` syscall inside its
+user namespace when the container's Linux capabilities are all dropped. No
+capability is added to the container.
 
 The separate browser image installs Playwright 1.64.1 and Debian's Chromium
 package with their dependency license records retained in the image. These are
