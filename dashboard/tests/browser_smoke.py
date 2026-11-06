@@ -16,6 +16,7 @@ from werkzeug.serving import make_server
 
 from dashboard.store import Store
 from dashboard.web import create_app
+from dashboard.tests.setup_browser_smoke import OfflineBrowser, verify as verify_setup
 
 
 def main():
@@ -43,7 +44,8 @@ def main():
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         origin = "https://127.0.0.1:" + str(port)
-        app = create_app(store, origin=origin, status_root=status)
+        offline = OfflineBrowser()
+        app = create_app(store, origin=origin, status_root=status, browser_client=offline)
         server = make_server("127.0.0.1", port, app, ssl_context="adhoc", threaded=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -85,6 +87,7 @@ def main():
                 page.screenshot(path=str(output / "mobile.png"), full_page=True)
                 assert not page.evaluate("document.documentElement.scrollWidth > innerWidth"), "Mobile horizontal overflow"
                 assert not errors, errors
+                verify_setup(browser, page, origin, store, offline, output)
                 browser.close()
             print("Browser smoke test passed: sign-in, account creation, hidden cookies, invitation, approval, start, and mobile layout.")
         finally:

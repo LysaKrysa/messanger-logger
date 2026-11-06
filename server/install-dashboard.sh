@@ -27,12 +27,16 @@ PY
 command -v docker >/dev/null
 docker image inspect messenger-logger:modern >/dev/null
 docker run --rm --network none --mount "type=bind,source=$LOGGER_SOURCE_DIR,target=/app,readonly" messenger-logger:modern --self-test
+# Fail before changing a working dashboard if this host cannot run the
+# sandboxed browser. The smoke check uses synthetic HTML and no external login.
+docker build --tag messenger-onboarding:browser "$LOGGER_SOURCE_DIR/browser"
+python3 "$LOGGER_SOURCE_DIR/browser/check_container.py"
 apt-get update
 apt-get install -y python3-venv openssl
 if ! id messenger-dashboard >/dev/null 2>&1; then
   useradd --system --user-group --home-dir /var/lib/messenger-dashboard --shell /usr/sbin/nologin messenger-dashboard
 fi
-for LOGGER_DASHBOARD_UNIT in messenger-dashboard-web messenger-dashboard-bot messenger-dashboard-manager; do
+for LOGGER_DASHBOARD_UNIT in messenger-dashboard-web messenger-dashboard-bot messenger-dashboard-manager messenger-dashboard-browser; do
   if systemctl cat "$LOGGER_DASHBOARD_UNIT" >/dev/null 2>&1; then
     systemctl stop "$LOGGER_DASHBOARD_UNIT"
   fi
@@ -53,6 +57,7 @@ modules = ('bridge_rpc.py', 'event_store.py', 'logger.py', 'view_messages.py', '
 for name in modules:
     shutil.copyfile(source / name, target / name)
 shutil.copytree(source / 'dashboard', target / 'dashboard', dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__', 'tests'))
+shutil.copytree(source / 'browser', target / 'browser', dirs_exist_ok=True, ignore=shutil.ignore_patterns('__pycache__'))
 shutil.copytree(source / 'LICENSES', target / 'LICENSES', dirs_exist_ok=True)
 for path in target.rglob('*'):
     path.chmod(0o755 if path.is_dir() else 0o644)
@@ -81,12 +86,13 @@ fi
 chown root:messenger-dashboard /etc/messenger-dashboard/tls.key /etc/messenger-dashboard/tls.crt
 chmod 640 /etc/messenger-dashboard/tls.key
 chmod 644 /etc/messenger-dashboard/tls.crt
-for LOGGER_DASHBOARD_UNIT in messenger-dashboard-web messenger-dashboard-bot messenger-dashboard-manager; do
+for LOGGER_DASHBOARD_UNIT in messenger-dashboard-web messenger-dashboard-bot messenger-dashboard-manager messenger-dashboard-browser; do
   install -m 644 "$LOGGER_SOURCE_DIR/server/$LOGGER_DASHBOARD_UNIT.service" "/etc/systemd/system/$LOGGER_DASHBOARD_UNIT.service"
 done
 systemctl daemon-reload
-systemctl enable --now messenger-dashboard-web messenger-dashboard-bot messenger-dashboard-manager
+systemctl enable --now messenger-dashboard-browser messenger-dashboard-web messenger-dashboard-bot messenger-dashboard-manager
 echo "Dashboard: https://$LOGGER_DASHBOARD_HOST:8443"
+echo 'Setup links: create, review, and disable invitations in the dashboard. One isolated browser runs at a time.'
 echo 'Allow inbound TCP 8443 in Oracle networking and the host firewall.'
 echo 'The initial HTTPS certificate is self-signed. Verify this SHA-256 fingerprint before trusting it:'
 openssl x509 -in /etc/messenger-dashboard/tls.crt -noout -fingerprint -sha256

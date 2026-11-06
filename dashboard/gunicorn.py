@@ -20,6 +20,9 @@ def post_worker_init(worker):
 
 
 def worker_exit(server, worker):
+    cleanup = getattr(getattr(worker, "wsgi", None), "extensions", {}).get("browser_cleanup")
+    if cleanup is not None:
+        cleanup()
     pairing = getattr(getattr(worker, "wsgi", None), "extensions", {}).get("pairing")
     if pairing is not None:
         pairing.stop.set()

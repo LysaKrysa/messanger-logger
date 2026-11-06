@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — self-service setup invitations
+
+- Generate single-use expiring setup links, list active links and recent history,
+  and disable access and temporary browsers from the dashboard.
+- Consent-based guest onboarding through a real remote Facebook browser,
+  encrypted cookie handoff, and an automatic personal Telegram invitation.
+- Separate controller and disposable unprivileged sandboxed Chromium containers,
+  with a deadline, memory limit, no data/token mounts, and no direct IP network.
+- Facebook-only HTTPS egress through an IP-checked Unix-socket proxy; no public
+  debugging/VNC ports or recording of inputs/screenshots.
+- Atomic claims, independent guest cookies/CSRF, reserved capacity, revocation
+  checks at credential commit, and the existing Telegram approval flow.
+- Offline browser/container checks and synthetic desktop/mobile guest flows.
+
 ## Unreleased — incoming-only capture and combined Telegram downloads
 
 - Exclude the logged-in account's regular/encrypted messages before storage or

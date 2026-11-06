@@ -33,7 +33,7 @@ def verify_bot(token):
         raise DashboardError("Telegram could not verify the bot. Check its token and server connectivity.") from None
 
 
-def create_app(store=None, *, origin=None, status_root=None, testing=False):
+def create_app(store=None, *, origin=None, status_root=None, testing=False, browser_client=None):
     app = Flask(__name__)
     store = store or from_environment()
     origin = (origin or os.environ.get("DASHBOARD_ORIGIN", "https://localhost:8443")).rstrip("/")
@@ -46,6 +46,8 @@ def create_app(store=None, *, origin=None, status_root=None, testing=False):
                       SESSION_COOKIE_NAME="messenger_admin", TRUSTED_HOSTS=[parsed.hostname], MAX_FORM_PARTS=12,
                       MAX_FORM_MEMORY_SIZE=140 * 1024)
     app.extensions["store"] = store
+    from .setup_web import install
+    install(app, store, origin, browser_client)
 
     def status(ident):
         try:
@@ -59,7 +61,7 @@ def create_app(store=None, *, origin=None, status_root=None, testing=False):
 
     @app.before_request
     def authenticate():
-        if request.endpoint in {"static", "favicon"}:
+        if request.endpoint in {"static", "favicon"} or request.blueprint == "setup":
             return None
         g.csrf = session.setdefault("csrf", secrets.token_urlsafe(32))
         if request.method == "POST":
@@ -83,7 +85,7 @@ def create_app(store=None, *, origin=None, status_root=None, testing=False):
     def secure_headers(response):
         response.headers.update({"Cache-Control": "no-store", "Pragma": "no-cache", "X-Content-Type-Options": "nosniff",
             "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin", "Strict-Transport-Security": "max-age=31536000",
-            "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+            "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' blob:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
             "Permissions-Policy": "camera=(), microphone=(), geolocation=()"})
         return response
 
