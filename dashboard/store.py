@@ -185,6 +185,11 @@ class Store:
                 db.execute("BEGIN IMMEDIATE")
                 if db.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] >= self.max_accounts:
                     raise DashboardError("This server has reached its configured account limit.")
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='setup_invites'").fetchone():
+                    now = self.clock()
+                    reserved = db.execute("SELECT COUNT(*) FROM setup_invites WHERE expires>? AND (state='pending' OR (state='claimed' AND session_expires>?))", (now, now)).fetchone()[0]
+                    if db.execute("SELECT COUNT(*) FROM accounts").fetchone()[0] + reserved >= self.max_accounts:
+                        raise DashboardError("Available account slots are reserved by active setup links. Disable an unused link before adding an account manually.")
                 db.execute("INSERT INTO accounts(id,name,cookies,facebook_id,created) VALUES (?,?,?,?,?)", (ident, name, self.seal("cookies:" + ident, parsed) if parsed else None, parsed["c_user"] if parsed else None, self.clock()))
         except sqlite3.IntegrityError:
             raise DashboardError("That Messenger account is already configured.") from None

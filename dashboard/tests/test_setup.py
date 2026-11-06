@@ -224,6 +224,8 @@ class SetupTests(unittest.TestCase):
         ident, _ = self.invites.create()
         with self.assertRaises(DashboardError):
             self.invites.create()
+        with self.assertRaises(DashboardError):
+            self.store.add_account("Manual account")
         self.invites.revoke(ident)
         self.invites.create()
         self.assertEqual(sum(row["active"] for row in self.invites.list()), 1)
