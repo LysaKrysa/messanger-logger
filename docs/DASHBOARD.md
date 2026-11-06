@@ -187,6 +187,78 @@ poller/webhook deliberately before using invitations. Outbound sends are paced
 centrally and every account has a request limit. Ambiguous delivery outcomes
 are not automatically resent. The existing topic-missing repair remains active.
 
+## One-time setup links
+
+Open **Setup links** and choose **Generate setup link**. A label is optional.
+Pick a 1-, 6-, or 24-hour lifetime, copy the link shown once, and share it privately.
+An unused invitation reserves one account slot. Opening a link or chat preview
+does not consume it; pressing Continue claims it for that visitor's browser.
+
+Your friend enters their name, reads the session-access explanation, and opens
+the real Facebook website in a temporary browser hosted on your server. They
+complete Facebook login and verification themselves, then explicitly approve
+connecting that session. The server encrypts the required cookies, creates their
+isolated account, closes the temporary browser, and shows their personal Telegram
+invitation. You do not copy their cookies or type their account details. Approve
+the resulting Telegram identity and press **Start** on the account page as usual.
+
+The invitation list shows active links and recent history: Ready to share, Setup
+in progress, Completed, Disabled, and Expired. **Disable link** blocks further
+guest requests immediately and asks the controller to close that browser. It
+also revokes any unused Telegram invitation from a completed setup; it does not
+stop an approved account. Use the account controls to stop or remove one.
+
+Claimed sessions have a hard **20-minute deadline**, and cannot be reused from
+another browser. Telegram invitations last 15 minutes. If setup expires, generate
+a new link. Existing approved accounts and the 72-hour retention are unchanged.
+
+### Browser installation and operation
+
+Rerun `server/install-dashboard.sh --host YOUR_PUBLIC_HOST` from this release.
+It builds a separate `messenger-onboarding:browser` image and runs an offline
+sandbox/input/frame test **before stopping a working dashboard**. This image
+uses Debian Chromium for the host architecture, including Oracle ARM64. The
+Messenger native transport is not rebuilt. A failed sandbox check blocks the
+upgrade; the installer does not disable Chromium's sandbox as a fallback.
+
+The new `messenger-dashboard-browser` service listens only on `127.0.0.1:8789`.
+No additional public port, VNC port, or Chrome debugging port is needed. Web and
+Telegram services retain no Docker access; the separate controller has a private,
+authenticated API limited to fixed operations and a fixed browser image.
+
+Each browser container runs as an unprivileged user, with Chromium's sandbox,
+a read-only root filesystem, no capabilities, no logger/database/bot-token
+mounts, no Docker socket, no persistent profile, and no Docker logs. Its IP
+network is disabled. Its only egress is a mounted Unix-socket CONNECT proxy
+restricted to HTTPS Facebook/Messenger/CDN domains. DNS answers must be public
+IPs, and connections are pinned to the checked addresses. TLS passes through
+without decryption. The browser cannot directly reach the host, other containers,
+or cloud metadata. Passwords, input events, screenshots, and verification codes
+are not recorded. Temporary files live in memory and disappear when it closes.
+Only the confirmed session cookies are saved using the existing encryption key.
+
+**One browser runs at a time**, with a 1 GiB RAM limit. Other invitees can retry
+after the current person finishes. Independent expiry cleanup closes abandoned
+sessions even if the web service is down. On restart, the controller removes
+orphaned containers carrying its exact managed label, leaving logger containers
+alone.
+
+```bash
+sudo systemctl status messenger-dashboard-browser --no-pager
+sudo journalctl -u messenger-dashboard-browser -n 40 --no-pager
+```
+
+The website is visibly labelled as a remote browser, without an imitation
+Facebook form or fake address bar. Facebook may require extra checks or reject
+a remote browser. Verification is never bypassed. Device-bound passkeys,
+hardware security keys, cameras and microphones are not forwarded; administrator
+cookie import remains available when remote login is unsupported.
+
+For sharing with friends, use a DNS hostname and trusted HTTPS certificate.
+The existing self-signed certificate works for testing but shows a browser trust
+warning. Follow the TLS instructions above to replace it. The service operator
+can access the confirmed Facebook session; guest consent screens state this.
+
 ## Operations and recovery
 
 To update an existing dashboard, run the installer from the desired source

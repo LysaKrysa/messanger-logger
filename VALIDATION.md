@@ -1,5 +1,21 @@
 # Validation
 
+## Self-service setup links
+
+- Synthetic tests cover atomic one-time claims, consent, origin/CSRF checks,
+  guest/admin separation, capacity reservations, expiry, disabling links,
+  credential-commit revocation races, encryption and Telegram pairing isolation.
+- Browser-controller tests cover fixed commands, private authentication, one
+  active session, hard expiry, prescribed container flags, and public-IP egress.
+- The HTTPS browser flow exercises invitation creation, guest setup, remote input
+  with a synthetic image, Telegram handoff, administrator approval, mobile layout,
+  one-time replay rejection and revocation of an active browser session.
+- A separate real Docker smoke check verifies sandboxed Chromium, synthetic input,
+  JPEG frames, no IP network, no published ports, unprivileged execution, read-only
+  root, bounded memory and the sole read-only proxy-socket mount.
+- No tests log into Facebook or send a real Telegram message. Actual Facebook
+  remote-login acceptance and device verification must be checked by the owner.
+
 ## Incoming-only capture and single-notice downloads
 
 - 187 standalone tests passed with the pinned offline native RPC check, and

@@ -1,0 +1,27 @@
+[Unit]
+Description=Messenger temporary onboarding browser controller
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/messenger-dashboard/app
+EnvironmentFile=/etc/messenger-dashboard/service.env
+Environment=DOCKER_CONFIG=/etc/messenger-dashboard/docker-client
+ExecStart=/opt/messenger-dashboard/venv/bin/gunicorn --config dashboard/gunicorn.py --bind 127.0.0.1:8789 dashboard.browser_host:create_app()
+Restart=on-failure
+RestartSec=10
+UMask=0077
+RuntimeDirectory=messenger-onboarding
+RuntimeDirectoryMode=0700
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/run/messenger-onboarding
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=256M
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

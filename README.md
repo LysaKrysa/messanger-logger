@@ -33,6 +33,7 @@ dashboard manages a small shared workspace with one Telegram bot.
 | **Content-only logs** | Read/delivery receipts, typing, and presence do not become chat records. |
 | **Unattended operation** | Run on Ubuntu with systemd, restart handling, and a separate cleanup timer. |
 | **Admin dashboard** | Manage up to six isolated account instances over HTTPS, replace cookies, and control capture. |
+| **One-time setup links** | Invite friends to connect through a temporary server browser and receive their Telegram invitation. List active links and disable them from the dashboard. |
 | **One shared bot** | Expiring Telegram invites, administrator approval, destination checks, and a private conversation topic map per person. |
 
 > [!IMPORTANT]
