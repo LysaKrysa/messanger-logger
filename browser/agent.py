@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import base64
+import argparse
 import json
 import os
 import select
+import signal
 import socket
 import socketserver
 import sys
 import threading
+import time
 from urllib.parse import urlsplit
 
 from playwright.sync_api import sync_playwright
@@ -45,6 +48,13 @@ class TunnelServer(socketserver.ThreadingTCPServer):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--offline-check", action="store_true")
+    parser.add_argument("--expires", type=float, default=time.time() + 1200)
+    args = parser.parse_args()
+    # The container expires even if the host controller is killed mid-session.
+    signal.signal(signal.SIGALRM, lambda *_: os._exit(0))
+    signal.setitimer(signal.ITIMER_REAL, max(0.1, min(1200, args.expires - time.time())))
     tunnel = TunnelServer(("127.0.0.1", 0), Tunnel)
     threading.Thread(target=tunnel.serve_forever, daemon=True).start()
     with sync_playwright() as playwright:

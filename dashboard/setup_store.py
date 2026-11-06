@@ -21,8 +21,10 @@ class SetupInvites:
                 id TEXT PRIMARY KEY, token_hash TEXT UNIQUE NOT NULL, label TEXT NOT NULL,
                 created REAL NOT NULL, expires REAL NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
                 session_hash TEXT UNIQUE, session_expires REAL, csrf TEXT, name TEXT,
-                account_id TEXT, telegram_link TEXT, claimed REAL
+                account_id TEXT, telegram_link TEXT, claimed REAL, telegram_hash TEXT
             )''')
+            if "telegram_hash" not in {row[1] for row in db.execute("PRAGMA table_info(setup_invites)")}:
+                db.execute("ALTER TABLE setup_invites ADD COLUMN telegram_hash TEXT")
 
     def create(self, label="", hours=24):
         if type(hours) is not int or hours not in {1, 6, 24}:
@@ -98,7 +100,7 @@ class SetupInvites:
                     raise DashboardError("This server has reached its account limit. Contact the administrator.")
                 db.execute("INSERT INTO accounts(id,name,cookies,facebook_id,created) VALUES (?,?,?,?,?)", (ident, row["name"], self.store.seal("cookies:" + ident, parsed), parsed["c_user"], self.store.clock()))
                 db.execute("INSERT INTO invites VALUES (?,?,?)", (digest(telegram_token), ident, self.store.clock() + 900))
-                db.execute("UPDATE setup_invites SET state='completed',account_id=?,telegram_link=? WHERE id=?", (ident, self.store.seal("setup-link:" + row["id"], link), row["id"]))
+                db.execute("UPDATE setup_invites SET state='completed',account_id=?,telegram_link=?,telegram_hash=? WHERE id=?", (ident, self.store.seal("setup-link:" + row["id"], link), digest(telegram_token), row["id"]))
         except sqlite3.IntegrityError:
             raise DashboardError("This Messenger account is already connected. Contact the administrator instead of creating a duplicate.") from None
         return ident
@@ -111,7 +113,7 @@ class SetupInvites:
         if row["state"] == "completed":
             with self.store.db() as db:
                 account = db.execute("SELECT chat_id,pending_chat FROM accounts WHERE id=?", (row["account_id"],)).fetchone()
-                invitation = db.execute("SELECT 1 FROM invites WHERE account_id=? AND expires>?", (row["account_id"], self.store.clock())).fetchone()
+                invitation = db.execute("SELECT 1 FROM invites WHERE account_id=? AND hash=? AND expires>?", (row["account_id"], row["telegram_hash"], self.store.clock())).fetchone()
             result["pairing"] = "approved" if account and account["chat_id"] else "pending_approval" if account and account["pending_chat"] else "waiting" if invitation else "expired"
             if invitation and row["telegram_link"]:
                 result["telegram_url"] = self.store.unseal("setup-link:" + row["id"], row["telegram_link"])
@@ -121,9 +123,9 @@ class SetupInvites:
         account_id(ident)
         with self.store.db() as db:
             db.execute("BEGIN IMMEDIATE")
-            row = db.execute("SELECT account_id FROM setup_invites WHERE id=?", (ident,)).fetchone()
+            row = db.execute("SELECT account_id,telegram_hash FROM setup_invites WHERE id=?", (ident,)).fetchone()
             if not row:
                 raise DashboardError("Setup link not found.")
             db.execute("UPDATE setup_invites SET state='revoked',session_hash=NULL,csrf=NULL,telegram_link=NULL WHERE id=?", (ident,))
             if row["account_id"]:
-                db.execute("DELETE FROM invites WHERE account_id=?", (row["account_id"],))
+                db.execute("DELETE FROM invites WHERE account_id=? AND hash=?", (row["account_id"], row["telegram_hash"]))

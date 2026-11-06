@@ -27,6 +27,7 @@ class DockerBrowser:
         self.sequence = 0
         self.failed = False
         command = self.command(ident, proxy_path, policy_path, image)
+        command += ["--expires", str(expires)]
         if offline_check:
             command.append("--offline-check")
         self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None if offline_check else subprocess.DEVNULL)

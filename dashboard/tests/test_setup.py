@@ -209,6 +209,16 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.store.claim_invite(result["telegram_url"].split("start=")[1], 123123, "Alex"))
         self.assertEqual(len(self.store.accounts()), 1)
 
+    def test_old_setup_cannot_expose_or_revoke_a_newer_telegram_invitation(self):
+        state = self.claim()
+        self.post("finish", {"approve": True}, state)
+        account = self.store.accounts()[0]
+        replacement = self.store.invite(account["id"])
+        progress = self.client.get("/setup/api/status", base_url=ORIGIN).json
+        self.assertIsNone(progress["telegram_url"])
+        self.invites.revoke(state["id"])
+        self.assertTrue(self.store.claim_invite(replacement.split("start=")[1], 676767, "@alex"))
+
     def test_active_links_reserve_capacity_and_disabling_releases_it(self):
         self.store.max_accounts = 1
         ident, _ = self.invites.create()
