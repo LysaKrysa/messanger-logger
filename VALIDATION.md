@@ -1,5 +1,15 @@
 # Validation
 
+## Verification challenge dependencies
+
+- Shared policy tests cover the documented reCAPTCHA scripts, frames and payloads,
+  exact third-party hosts, restricted URL paths, TLS/port rules and Facebook-only
+  session confirmation. Third-party DNS is still rejected for private/metadata IPs.
+- The real sandboxed Chromium check loads synthetic Google/reCAPTCHA scripts,
+  a cross-origin frame and its image through the private Unix-socket proxy.
+  It asserts that unrelated Google paths and unlisted subdomains never reach
+  the fixture server. There are no live Google, Facebook or Telegram requests.
+
 ## Remote browser responsiveness
 
 - Live-view tests cover binary JPEG streaming, no-cache/same-origin headers,

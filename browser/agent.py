@@ -16,14 +16,9 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import sync_playwright
 from events import normalize
+from policy import allowed_url, facebook_url
 
-HOSTS = ("facebook.com", "facebook.net", "fbcdn.net", "fbsbx.com", "messenger.com")
 COOKIE_NAMES = {"c_user", "xs", "datr", "fr", "sb", "wd", "presence", "ps_l", "ps_n"}
-
-
-def allowed(url):
-    parsed = urlsplit(url)
-    return parsed.scheme == "https" and parsed.port in {None, 443} and not parsed.username and not parsed.password and any(parsed.hostname == host or (parsed.hostname or "").endswith("." + host) for host in HOSTS)
 
 
 class Tunnel(socketserver.BaseRequestHandler):
@@ -63,7 +58,7 @@ def main():
             proxy={"server": "http://127.0.0.1:" + str(tunnel.server_address[1])},
             args=["--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"])
         context = browser.new_context(viewport={"width": 1024, "height": 768}, accept_downloads=False, service_workers="block", ignore_https_errors="--offline-check" in sys.argv)
-        context.route("**/*", lambda route: route.continue_() if allowed(route.request.url) else route.abort())
+        context.route("**/*", lambda route: route.continue_() if allowed_url(route.request.url) else route.abort())
         page = context.new_page()
         context.set_default_timeout(10000)
         capture_page, capture_session = None, None
@@ -107,7 +102,8 @@ def main():
                     result = {"input": page.locator("input").input_value()}
                 elif action == "smoke-network" and "--offline-check" in sys.argv:
                     page.goto("https://fixture.facebook.com/", wait_until="domcontentloaded", timeout=10000)
-                    result = {"title": page.title()}
+                    page.wait_for_function("() => globalThis.syntheticChallenge?.script && globalThis.syntheticChallenge?.frame && globalThis.syntheticChallenge?.alternative", timeout=10000)
+                    result = {"title": page.title(), "challenge_loaded": True, "unrelated_blocked": page.evaluate("globalThis.syntheticUnrelated === false")}
                 elif action == "frame":
                     now = time.monotonic()
                     if now - checked_at >= 0.8:
@@ -138,7 +134,7 @@ def main():
                     apply_input(normalize([item])[0])
                     result = {}
                 elif action == "capture":
-                    if not allowed(page.url) or any(part in urlsplit(page.url).path.lower() for part in ("login", "checkpoint", "recover")):
+                    if not facebook_url(page.url) or any(part in urlsplit(page.url).path.lower() for part in ("login", "checkpoint", "recover")):
                         raise ValueError
                     result = {"cookies": {c["name"]: c["value"] for c in context.cookies(["https://www.facebook.com/"]) if c["name"] in COOKIE_NAMES}}
                     if not all(result["cookies"].get(k) for k in ("c_user", "xs", "datr")):
