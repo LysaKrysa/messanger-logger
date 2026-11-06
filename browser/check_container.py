@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import socket
 import ssl
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -53,8 +54,21 @@ def main():
                 browser.call("click", {"x": 50, "y": 15})
                 browser.call("text", {"text": "OFFLINE_SYNTHETIC_INPUT"})
                 assert browser.call("smoke-check")["input"] == "OFFLINE_SYNTHETIC_INPUT"
+                browser.call("input", {"events": [
+                    {"action": "key", "key": "Control+A"},
+                    {"action": "text", "text": "BATCHED_SYNTHETIC_INPUT"},
+                ]})
+                assert browser.call("smoke-check")["input"] == "BATCHED_SYNTHETIC_INPUT"
+                assert "jpeg" not in browser.call("frame", {"metadata_only": True})
                 frame = browser.call("frame")
                 assert base64.b64decode(frame["jpeg"]).startswith(b"\xff\xd8") and not frame["ready"]
+                timings = []
+                for _ in range(12):
+                    began = time.monotonic()
+                    browser.call("frame")
+                    timings.append(time.monotonic() - began)
+                assert sum(timings) < 3, "Direct viewport capture did not sustain five frames per second."
+                print("Offline direct-capture median: {:.0f} ms; slowest: {:.0f} ms.".format(statistics.median(timings) * 1000, max(timings) * 1000))
                 inspected = subprocess.run(["docker", "inspect", browser.name], check=True, capture_output=True)
                 info = json.loads(inspected.stdout)[0]
                 host = info["HostConfig"]

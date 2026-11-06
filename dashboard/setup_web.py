@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import hmac
+import base64
 import json
 import re
+import threading
+import time
 from datetime import datetime
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -13,6 +16,7 @@ from flask import Blueprint, Response, abort, jsonify, redirect, render_template
 
 from .setup_store import SetupInvites, SESSION_SECONDS
 from .store import DashboardError
+from browser.events import normalize
 
 COOKIE = "__Host-messenger_setup"
 
@@ -22,11 +26,11 @@ class BrowserClient:
         self.secret = secret
 
     def call(self, ident, action, data=None):
-        if not re.fullmatch(r"[a-f0-9]{32}", ident) or action not in {"start", "stop", "frame", "click", "key", "text", "scroll", "reload", "capture"}:
+        if not re.fullmatch(r"[a-f0-9]{32}", ident) or action not in {"start", "stop", "frame", "input", "click", "key", "text", "scroll", "reload", "capture"}:
             raise DashboardError("Invalid browser request.")
         try:
             req = Request("http://127.0.0.1:8789/browser/" + ident + "/" + action,
-                data=json.dumps(data or {}).encode(), headers={"Content-Type": "application/json", "Authorization": "Bearer " + self.secret})
+                data=json.dumps(data or {}, ensure_ascii=False).encode(), headers={"Content-Type": "application/json", "Authorization": "Bearer " + self.secret})
             try:
                 response = urlopen(req, timeout=45 if action in {"start", "reload"} else 15)
             except HTTPError as error:
@@ -56,6 +60,15 @@ def install(app, store, origin, browser=None):
     app.extensions["setup_invites"] = invitations
     app.extensions["setup_browser"] = browser
     guest = Blueprint("setup", __name__)
+    # Long-lived viewers cannot consume all eight web threads. Inputs/admin
+    # requests retain room even while a stream reconnects in another tab.
+    viewers = threading.BoundedSemaphore(2)
+
+    def jpeg(result):
+        data = base64.b64decode(result["jpeg"], validate=True)
+        if not data.startswith(b"\xff\xd8") or len(data) > 1000000:
+            raise DashboardError("The browser frame was unavailable.")
+        return data
 
     def guest_session():
         token = request.cookies.get(COOKIE)
@@ -118,12 +131,63 @@ def install(app, store, origin, browser=None):
         # Only pixels, the observed hostname and a readiness flag reach the guest.
         return jsonify(jpeg=result.get("jpeg", ""), site=result.get("site", "Starting browser"), width=result.get("width", 1024), height=result.get("height", 768), ready=result.get("ready") is True)
 
+    @guest.post("/setup/api/view")
+    def view():
+        _, row = live_session()
+        result = browser.call(row["id"], "frame", {"metadata_only": True})
+        return jsonify(site=result.get("site", "Starting browser"), width=result.get("width", 1024), height=result.get("height", 768), ready=result.get("ready") is True)
+
+    @guest.get("/setup/api/stream")
+    def stream():
+        token, row = live_session()
+        if not viewers.acquire(blocking=False):
+            abort(429)
+        try:
+            first = jpeg(browser.call(row["id"], "frame"))
+        except Exception:
+            viewers.release()
+            raise
+        released = False
+        release_lock = threading.Lock()
+        def release():
+            nonlocal released
+            with release_lock:
+                if not released:
+                    released = True
+                    viewers.release()
+        def frames():
+            image = first
+            try:
+                while True:
+                    current = invitations.session(token)
+                    if not current or current["state"] != "claimed":
+                        break
+                    started = time.monotonic()
+                    yield (b"--messenger-view\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(image)).encode() + b"\r\n\r\n" + image + b"\r\n")
+                    time.sleep(max(0, 0.1 - (time.monotonic() - started)))
+                    image = jpeg(browser.call(row["id"], "frame"))
+            except Exception:
+                pass  # A disconnect/expiry closes a view, never records frames.
+            finally:
+                release()
+        response = Response(frames(), content_type="multipart/x-mixed-replace; boundary=messenger-view")
+        response.headers.update({"X-Accel-Buffering": "no", "Cross-Origin-Resource-Policy": "same-origin", "Vary": "Cookie"})
+        response.call_on_close(release)
+        return response
+
     @guest.post("/setup/api/input")
     def action():
         _, row = live_session()
         data = request.get_json(silent=True) or {}
         if not isinstance(data, dict):
             abort(400)
+        if "events" in data:
+            try:
+                events = normalize(data["events"])
+            except (ValueError, TypeError):
+                raise DashboardError("The browser input was not accepted.") from None
+            browser.call(row["id"], "input", {"events": events})
+            return jsonify(ok=True)
         action = data.get("action")
         if action not in {"click", "key", "text", "scroll", "reload"}:
             abort(400)

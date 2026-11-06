@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — smoother remote login browser
+
+- Replace 1.2-second screenshot polling with an authenticated live JPEG stream
+  capped at 10 fps, direct compositor capture and lightweight login metadata.
+- Batch rapid text/wheel input while preserving click, typing and key order;
+  support touch scrolling and avoid replaying ambiguous input requests.
+- Pause hidden views, reconnect read-only streams, and provide a decoded snapshot
+  fallback without changing session expiry, revocation or browser isolation.
+- Add stream authorization/cleanup tests, input queue regressions, browser-flow
+  frame-rate/pause checks and an offline real-Chromium capture benchmark.
+
 ## Unreleased — self-service setup invitations
 
 - Generate single-use expiring setup links, list active links and recent history,

@@ -237,6 +237,16 @@ or cloud metadata. Passwords, input events, screenshots, and verification codes
 are not recorded. Temporary files live in memory and disappear when it closes.
 Only the confirmed session cookies are saved using the existing encryption key.
 
+The remote view uses a live JPEG stream capped at 10 frames per second, rather
+than a screenshot reload every 1.2 seconds. Direct compositor capture avoids
+font-loading waits for each frame. Typing and wheel bursts are batched in order,
+and touch swipes scroll the remote page. Inputs with an unknown delivery outcome
+are never automatically replayed. The view pauses while its tab is hidden and
+resumes on return; a reduced-rate snapshot fallback supports interrupted streams.
+No frames are recorded. Revocation, completion and expiry close an open stream,
+and stream concurrency is bounded so inputs and administrator requests retain
+available web threads.
+
 **One browser runs at a time**, with a 1 GiB RAM limit. Other invitees can retry
 after the current person finishes. Independent expiry cleanup closes abandoned
 sessions even if the web service is down. On restart, the controller removes
