@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — load Arkose MatchKey verification
+
+- Support four specific Arkose API, frame and CDN hosts in both browser egress
+  layers, leaving other provider subdomains blocked. Facebook can
+  present this provider instead of Google reCAPTCHA during a different session.
+- Exercise Google and Arkose synthetic scripts, frames, an API request and image
+  dependencies together through the real sandboxed browser and private proxy.
+- Retain Facebook-only session confirmation, Google path restrictions,
+  private-address rejection and manual verification.
+
 ## Unreleased — load Facebook's verification challenge
 
 - Fix the blank Google reCAPTCHA challenge caused by Facebook-only request

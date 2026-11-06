@@ -6,8 +6,34 @@ from unittest.mock import patch
 from browser.policy import RECAPTCHA_HOSTS, allowed_host, allowed_url, facebook_url
 from dashboard.browser_proxy import public_addresses
 
+ARKOSE_HOSTS = {"meta-api.arkoselabs.com", "client-api.arkoselabs.com", "iframe.arkoselabs.com", "cdn.arkoselabs.com"}
+
 
 class BrowserPolicyTests(unittest.TestCase):
+    def test_specific_arkose_api_frame_and_cdn_are_allowed_in_both_layers(self):
+        for host, path in (
+            ("meta-api.arkoselabs.com", "/v2/SYNTHETIC-KEY/api.js"),
+            ("client-api.arkoselabs.com", "/fc/api/"),
+            ("iframe.arkoselabs.com", "/fixture/frame.html"),
+            ("cdn.arkoselabs.com", "/fc/assets/fixture.gif"),
+        ):
+            with self.subTest(host=host, path=path):
+                self.assertTrue(allowed_host(host))
+                self.assertTrue(allowed_url("https://" + host + path))
+
+    def test_arkose_host_scope_excludes_other_tenants_and_lookalike_domains(self):
+        for host in ("other-tenant-api.arkoselabs.com", "unlisted.arkoselabs.com", "evil.cdn.arkoselabs.com", "arkoselabs.com", "evilarkoselabs.com", "meta-api.arkoselabs.com.evil.example", "arkoselabs.com.evil.example", "arkoselabs.localhost", "arkoselabs.com@127.0.0.1"):
+            with self.subTest(host=host):
+                self.assertFalse(allowed_host(host))
+                self.assertFalse(allowed_url("https://" + host + "/v2/fixture/api.js"))
+        self.assertTrue(allowed_host("CDN.ARKOSELABS.COM."))
+        self.assertTrue(allowed_url("https://CDN.ARKOSELABS.COM./fc/assets/fixture.gif"))
+
+    def test_arkose_urls_cannot_confirm_a_facebook_session(self):
+        for host in ARKOSE_HOSTS:
+            for path in ("/", "/v2/fixture/api.js", "/https://www.facebook.com/"):
+                self.assertFalse(facebook_url("https://" + host + path))
+
     def test_documented_verification_scripts_frames_and_payloads_are_allowed(self):
         for url in (
             "https://www.google.com/recaptcha/enterprise.js?render=synthetic",
@@ -45,7 +71,7 @@ class BrowserPolicyTests(unittest.TestCase):
         self.assertTrue(facebook_url("https://m.facebook.com/"))
 
     def test_https_port_and_credential_restrictions_apply_to_all_hosts(self):
-        for host in ("www.facebook.com", "www.google.com", "www.gstatic.com"):
+        for host in ("www.facebook.com", "www.google.com", "www.gstatic.com", *ARKOSE_HOSTS):
             for url in ("http://" + host + "/recaptcha/api.js", "https://" + host + ":8443/recaptcha/api.js", "https://user:secret@" + host + "/recaptcha/api.js", "https://" + host + ":invalid/recaptcha/api.js"):
                 with self.subTest(url=url):
                     self.assertFalse(allowed_url(url))
@@ -54,7 +80,7 @@ class BrowserPolicyTests(unittest.TestCase):
             self.assertFalse(allowed_url(url))
 
     def test_captcha_dns_cannot_resolve_to_private_or_metadata_addresses(self):
-        for host in RECAPTCHA_HOSTS:
+        for host in RECAPTCHA_HOSTS | ARKOSE_HOSTS:
             for address in ("127.0.0.1", "169.254.169.254", "10.0.0.1", "::1", "fd00::1"):
                 with patch("dashboard.browser_proxy.socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 0, "", (address, 443))]):
                     with self.assertRaises(ValueError):

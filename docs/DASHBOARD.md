@@ -230,10 +230,13 @@ Each browser container runs as an unprivileged user, with Chromium's sandbox,
 a read-only root filesystem, no capabilities, no logger/database/bot-token
 mounts, no Docker socket, no persistent profile, and no Docker logs. Its IP
 network is disabled. Its only egress is a mounted Unix-socket CONNECT proxy
-restricted to HTTPS Facebook/Messenger/CDN domains and the exact documented
-Google reCAPTCHA hosts. The browser additionally limits those third-party
-requests to `/recaptcha/` paths; general Google pages and unlisted subdomains
-remain blocked. The browser and proxy use the same host policy. DNS answers must be public
+restricted to HTTPS Facebook/Messenger/CDN domains, the exact documented
+Google reCAPTCHA hosts, and four Arkose client hosts: `meta-api.arkoselabs.com`,
+`client-api.arkoselabs.com`, `iframe.arkoselabs.com` and `cdn.arkoselabs.com`.
+Unlisted Arkose hosts stay blocked. The browser additionally limits Google requests to `/recaptcha/`
+paths; general Google pages and unlisted Google subdomains remain blocked.
+Arkose's API, embedded challenge and CDN use different paths on those exact
+hosts. The browser and proxy use the same host policy. DNS answers must be public
 IPs, and connections are pinned to the checked addresses. TLS passes through
 without decryption. The browser cannot directly reach the host, other containers,
 or cloud metadata. Passwords, input events, screenshots, and verification codes
@@ -250,13 +253,18 @@ No frames are recorded. Revocation, completion and expiry close an open stream,
 and stream concurrency is bounded so inputs and administrator requests retain
 available web threads.
 
-Facebook can use Google reCAPTCHA for verification. Older browser releases
-blocked those dependencies, leaving the Meta notice visible with no challenge.
+Facebook can show Google reCAPTCHA or Arkose Labs MatchKey for verification;
+the provider named in the Meta notice can differ between sessions. Older
+browser releases blocked these dependencies, leaving the notice with no challenge.
 Update with the installer above, then reopen the temporary browser to load them.
 Complete the challenge yourself. The offline check verifies synthetic scripts,
-an embedded frame and an image across the documented hosts through the private
-proxy; it does not contact Google or solve a live CAPTCHA. The permitted hosts
-and paths follow [Google's reCAPTCHA FAQ](https://docs.cloud.google.com/recaptcha/docs/faq).
+embedded frames, an API request and images across both providers' domains through
+the private proxy; it does not contact either provider or solve a live CAPTCHA.
+The policies follow [Google's reCAPTCHA FAQ](https://docs.cloud.google.com/recaptcha/docs/faq)
+and [Arkose's Domain Policy](https://developer.arkoselabs.com/docs/domain-policy).
+Passing these offline checks confirms dependency routing, not that a provider
+will accept a real remote login. If the live challenge is still blank, tell the
+administrator which provider the notice names and whether reloading changes it.
 
 **One browser runs at a time**, with a 1 GiB RAM limit. Other invitees can retry
 after the current person finishes. Independent expiry cleanup closes abandoned

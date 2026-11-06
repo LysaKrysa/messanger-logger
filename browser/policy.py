@@ -8,6 +8,10 @@ FACEBOOK_DOMAINS = ("facebook.com", "facebook.net", "fbcdn.net", "fbsbx.com", "m
 # Google's documented reCAPTCHA scripts, frames, API and alternate endpoint:
 # https://docs.cloud.google.com/recaptcha/docs/faq
 RECAPTCHA_HOSTS = frozenset({"www.google.com", "recaptcha.google.com", "www.gstatic.com", "www.recaptcha.net"})
+# Permit only the specific Arkose client API, challenge frame and CDN hosts
+# used by this integration; do not open the entire provider domain family.
+# https://developer.arkoselabs.com/docs/domain-policy
+ARKOSE_HOSTS = frozenset({"meta-api.arkoselabs.com", "client-api.arkoselabs.com", "iframe.arkoselabs.com", "cdn.arkoselabs.com"})
 
 
 def facebook_host(host):
@@ -19,7 +23,11 @@ def facebook_host(host):
 
 def allowed_host(host):
     """CONNECT sees a hostname, never the encrypted request path."""
-    return isinstance(host, str) and (facebook_host(host) or host.lower().rstrip(".") in RECAPTCHA_HOSTS)
+    return isinstance(host, str) and (facebook_host(host) or arkose_host(host) or host.lower().rstrip(".") in RECAPTCHA_HOSTS)
+
+
+def arkose_host(host):
+    return isinstance(host, str) and host.lower().rstrip(".") in ARKOSE_HOSTS
 
 
 def https_url(url):
@@ -44,7 +52,7 @@ def allowed_url(url):
     parsed = https_url(url)
     if parsed is None:
         return False
-    if facebook_host(parsed.hostname):
+    if facebook_host(parsed.hostname) or arkose_host(parsed.hostname):
         return True
     # The browser can restrict paths before TLS; the host proxy also checks
     # these exact hosts and pins them to verified public DNS addresses.
