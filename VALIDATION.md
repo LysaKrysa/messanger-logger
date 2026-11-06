@@ -3,12 +3,13 @@
 ## Verification challenge dependencies
 
 - Shared policy tests cover the documented reCAPTCHA scripts, frames and payloads,
-  exact third-party hosts, restricted URL paths, TLS/port rules and Facebook-only
+  exact Google hosts and paths, four specific Arkose hosts, TLS/port rules and Facebook-only
   session confirmation. Third-party DNS is still rejected for private/metadata IPs.
-- The real sandboxed Chromium check loads synthetic Google/reCAPTCHA scripts,
-  a cross-origin frame and its image through the private Unix-socket proxy.
-  It asserts that unrelated Google paths and unlisted subdomains never reach
-  the fixture server. There are no live Google, Facebook or Telegram requests.
+- The real sandboxed Chromium check loads synthetic Google and Arkose scripts,
+  cross-origin frames, an API POST and images through the private Unix-socket proxy.
+  It asserts that unrelated Google paths, unlisted Google subdomains and Arkose
+  unlisted Arkose hosts and lookalike domains never reach the fixture server. There are no live provider,
+  Facebook or Telegram requests. A real login remains a manual deployment check.
 
 ## Remote browser responsiveness
 

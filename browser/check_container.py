@@ -33,15 +33,22 @@ class Fixture(BaseHTTPRequestHandler):
             body = b"""<title>Offline HTTPS proxy fixture</title><h1>Synthetic local egress test</h1>
 <script>
 globalThis.syntheticChallenge = {script:false, frame:false, alternative:false};
+globalThis.syntheticArkose = {script:false, client:false, frame:false};
 globalThis.syntheticUnrelated = false;
 addEventListener('message', event => {
   if (event.origin === 'https://recaptcha.google.com' && event.data === 'SYNTHETIC_FRAME_READY') syntheticChallenge.frame = true;
+  if (event.origin === 'https://iframe.arkoselabs.com' && event.data === 'SYNTHETIC_ARKOSE_READY') syntheticArkose.frame = true;
 });
 </script>
 <script src="https://www.google.com/recaptcha/enterprise.js"></script>
 <script src="https://www.recaptcha.net/recaptcha/api.js"></script>
+<script src="https://meta-api.arkoselabs.com/v2/SYNTHETIC-KEY/api.js"></script>
+<script src="https://client-api.arkoselabs.com/fc/api.js"></script>
 <script src="https://www.google.com/search"></script>
 <script src="https://www.gstatic.com/unrelated.js"></script>
+<script src="https://evilarkoselabs.com/fixture.js"></script>
+<script src="https://meta-api.arkoselabs.com.evil.example/fixture.js"></script>
+<script src="https://other-tenant-api.arkoselabs.com/fixture.js"></script>
 <script src="https://unlisted.gstatic.com/recaptcha/unrelated.js"></script>"""
         elif path == "/recaptcha/enterprise.js":
             content_type = "application/javascript"
@@ -57,6 +64,25 @@ addEventListener('message', event => {
         elif path == "/recaptcha/api2/payload":
             content_type = "image/gif"
             body = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+        elif path == "/v2/SYNTHETIC-KEY/api.js":
+            content_type = "application/javascript"
+            body = b"syntheticArkose.script = true; const arkoseFrame = document.createElement('iframe'); arkoseFrame.src = 'https://iframe.arkoselabs.com/fixture/frame.html'; document.body.appendChild(arkoseFrame);"
+        elif path == "/fc/api.js":
+            content_type = "application/javascript"
+            body = b"syntheticArkose.client = true;"
+        elif path == "/fixture/frame.html":
+            body = b'<h1>Synthetic Arkose resource test</h1><script src="https://cdn.arkoselabs.com/fc/assets/fixture.js"></script>'
+        elif path == "/fc/assets/fixture.js":
+            content_type = "application/javascript"
+            body = b"""(async () => {
+const response = await fetch('https://meta-api.arkoselabs.com/fixture/session', {method:'POST', body:'SYNTHETIC_RESOURCE_TEST'});
+if ((await response.json()).status !== 'synthetic-ready') throw new Error('Synthetic API did not respond');
+const image = new Image(); image.onload = () => parent.postMessage('SYNTHETIC_ARKOSE_READY', 'https://fixture.facebook.com');
+image.src = 'https://cdn.arkoselabs.com/fc/assets/fixture.gif'; document.body.appendChild(image);
+})();"""
+        elif path == "/fc/assets/fixture.gif":
+            content_type = "image/gif"
+            body = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
         else:
             content_type = "application/javascript"
             body = b"globalThis.syntheticUnrelated = true;"
@@ -65,6 +91,19 @@ addEventListener('message', event => {
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_POST(self):
+        path = urlsplit(self.path).path
+        self.server.seen.add((self.headers.get("Host"), path))
+        body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        assert path == "/fixture/session" and body == b"SYNTHETIC_RESOURCE_TEST"
+        response = b'{"status":"synthetic-ready"}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "https://iframe.arkoselabs.com")
+        self.send_header("Content-Length", str(len(response)))
+        self.end_headers()
+        self.wfile.write(response)
 
 
 def main():
@@ -117,23 +156,31 @@ def main():
                 with patch("dashboard.browser_proxy.public_addresses", return_value=[(socket.AF_INET, ("127.0.0.1", fixture.server_port))]):
                     network = browser.call("smoke-network")
                     assert network["title"] == "Offline HTTPS proxy fixture"
-                    assert network["challenge_loaded"] and network["unrelated_blocked"]
+                    assert network["challenge_loaded"] and network["arkose_loaded"] and network["unrelated_blocked"]
                     for request in (
                         ("www.google.com", "/recaptcha/enterprise.js"),
                         ("recaptcha.google.com", "/recaptcha/enterprise/anchor"),
                         ("www.gstatic.com", "/recaptcha/releases/offline/fixture.js"),
                         ("www.google.com", "/recaptcha/api2/payload"),
                         ("www.recaptcha.net", "/recaptcha/api.js"),
+                        ("meta-api.arkoselabs.com", "/v2/SYNTHETIC-KEY/api.js"),
+                        ("client-api.arkoselabs.com", "/fc/api.js"),
+                        ("iframe.arkoselabs.com", "/fixture/frame.html"),
+                        ("cdn.arkoselabs.com", "/fc/assets/fixture.js"),
+                        ("meta-api.arkoselabs.com", "/fixture/session"),
+                        ("cdn.arkoselabs.com", "/fc/assets/fixture.gif"),
                     ):
                         assert request in fixture.seen, "A synthetic verification dependency did not traverse the private proxy."
                     for request in (("www.google.com", "/search"), ("www.gstatic.com", "/unrelated.js"), ("unlisted.gstatic.com", "/recaptcha/unrelated.js")):
                         assert request not in fixture.seen, "An unrelated Google request was allowed."
+                    for host in ("evilarkoselabs.com", "meta-api.arkoselabs.com.evil.example", "other-tenant-api.arkoselabs.com"):
+                        assert (host, "/fixture.js") not in fixture.seen, "An Arkose lookalike domain was allowed."
             finally:
                 browser.close()
                 proxy.shutdown()
                 fixture.shutdown()
                 fixture.server_close()
-    print("Sandboxed browser/input/isolated HTTPS proxy and synthetic cross-domain verification frame checks passed. No live CAPTCHA, Facebook login or Telegram send.")
+    print("Sandboxed browser/input/isolated HTTPS proxy and synthetic Google/Arkose cross-domain script/frame/API/image checks passed. No live CAPTCHA, Facebook login or Telegram send.")
 
 
 if __name__ == "__main__":

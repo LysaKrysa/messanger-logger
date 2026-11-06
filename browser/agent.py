@@ -102,8 +102,8 @@ def main():
                     result = {"input": page.locator("input").input_value()}
                 elif action == "smoke-network" and "--offline-check" in sys.argv:
                     page.goto("https://fixture.facebook.com/", wait_until="domcontentloaded", timeout=10000)
-                    page.wait_for_function("() => globalThis.syntheticChallenge?.script && globalThis.syntheticChallenge?.frame && globalThis.syntheticChallenge?.alternative", timeout=10000)
-                    result = {"title": page.title(), "challenge_loaded": True, "unrelated_blocked": page.evaluate("globalThis.syntheticUnrelated === false")}
+                    page.wait_for_function("() => globalThis.syntheticChallenge?.script && globalThis.syntheticChallenge?.frame && globalThis.syntheticChallenge?.alternative && globalThis.syntheticArkose?.script && globalThis.syntheticArkose?.client && globalThis.syntheticArkose?.frame", timeout=10000)
+                    result = {"title": page.title(), "challenge_loaded": True, "arkose_loaded": True, "unrelated_blocked": page.evaluate("globalThis.syntheticUnrelated === false")}
                 elif action == "frame":
                     now = time.monotonic()
                     if now - checked_at >= 0.8:
