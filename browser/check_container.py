@@ -18,7 +18,7 @@ def main():
         path = Path(directory) / "egress.sock"
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as proxy:
             proxy.bind(str(path))
-            browser = DockerBrowser(uuid.uuid4().hex, time.time() + 120, proxy_path=path, policy_path=Path(__file__).resolve().with_name("seccomp.json"))
+            browser = DockerBrowser(uuid.uuid4().hex, time.time() + 120, proxy_path=path, policy_path=Path(__file__).resolve().with_name("seccomp.json"), offline_check=True)
             try:
                 result = browser.call("smoke")
                 assert result["sandboxed"] and result["title"] == "Offline browser fixture"

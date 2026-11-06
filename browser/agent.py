@@ -63,6 +63,8 @@ def main():
                 item = json.loads(line)
                 request_id = item.get("id")
                 action = item.get("action")
+                if "--offline-check" in sys.argv and action in {"open", "capture"}:
+                    raise ValueError("External login is disabled in the offline check.")
                 pages = [p for p in context.pages if not p.is_closed()]
                 if pages:
                     page = pages[-1]
@@ -112,6 +114,9 @@ def main():
                     raise ValueError
                 print(json.dumps({"id": request_id, "ok": True, "result": result}), flush=True)
             except Exception:
+                if "--offline-check" in sys.argv:
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
                 print(json.dumps({"id": request_id, "ok": False}), flush=True)  # Never print provider, page, or input details.
         context.close()
         browser.close()
@@ -122,5 +127,8 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
+        if "--offline-check" in sys.argv:
+            import traceback
+            traceback.print_exc(file=sys.stderr)
         print('{"ok":false}', flush=True)
         raise SystemExit(1)

@@ -18,7 +18,7 @@ class BrowserError(ValueError):
 
 
 class DockerBrowser:
-    def __init__(self, ident, expires, *, proxy_path, policy_path, image=IMAGE, clock=time.time):
+    def __init__(self, ident, expires, *, proxy_path, policy_path, image=IMAGE, clock=time.time, offline_check=False):
         if not IDENT.fullmatch(ident):
             raise BrowserError("Invalid setup session.")
         self.ident, self.expires, self.clock = ident, expires, clock
@@ -26,7 +26,10 @@ class DockerBrowser:
         self.lock, self.answers = threading.Lock(), queue.Queue(maxsize=4)
         self.sequence = 0
         self.failed = False
-        self.process = subprocess.Popen(self.command(ident, proxy_path, policy_path, image), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        command = self.command(ident, proxy_path, policy_path, image)
+        if offline_check:
+            command.append("--offline-check")
+        self.process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None if offline_check else subprocess.DEVNULL)
         self.reader = threading.Thread(target=self._read, daemon=True)
         self.reader.start()
 
@@ -96,6 +99,7 @@ class DockerBrowser:
             self.process.wait(timeout=5)
         except Exception:
             self.process.kill()
+            self.process.wait(timeout=5)
         self.reader.join(timeout=1)
 
 
