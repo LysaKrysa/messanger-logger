@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased — load Facebook's verification challenge
+
+- Fix the blank Google reCAPTCHA challenge caused by Facebook-only request
+  filtering in both Chromium and the host's private proxy.
+- Share the host policy and permit the documented reCAPTCHA hosts, with
+  `/recaptcha/` path restrictions in Chromium. Confirming a session still
+  requires a Facebook URL; general Google pages and other subdomains stay blocked.
+- Add policy, private-address and real offline cross-domain frame/script/image
+  checks. Verification remains manual; no live CAPTCHA is used in tests.
+
 ## Unreleased — smoother remote login browser
 
 - Replace 1.2-second screenshot polling with an authenticated live JPEG stream

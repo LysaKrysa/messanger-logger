@@ -7,12 +7,7 @@ import socket
 import socketserver
 import threading
 
-
-def allowed_host(host):
-    host = host.lower().rstrip(".")
-    return any(host == domain or host.endswith("." + domain) for domain in (
-        "facebook.com", "facebook.net", "fbcdn.net", "fbsbx.com", "messenger.com",
-    ))
+from browser.policy import allowed_host
 
 
 def public_addresses(host):
