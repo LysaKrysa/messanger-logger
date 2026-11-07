@@ -1,5 +1,23 @@
 "use strict";
 (() => {
+  // HTMLImageElement.width/height report the CSS display size. Inputs use
+  // the decoded frame's intrinsic size, independent of zoom and responsive CSS.
+  function mapPoint(image, clientX, clientY) {
+    const rect = image.getBoundingClientRect();
+    if (!image.naturalWidth || !image.naturalHeight || rect.width <= 0 || rect.height <= 0 ||
+        !Number.isFinite(clientX) || !Number.isFinite(clientY) ||
+        clientX < rect.left || clientX > rect.left + rect.width ||
+        clientY < rect.top || clientY > rect.top + rect.height) return null;
+    return {
+      x: Math.max(0, Math.min(image.naturalWidth - 1, (clientX - rect.left) * image.naturalWidth / rect.width)),
+      y: Math.max(0, Math.min(image.naturalHeight - 1, (clientY - rect.top) * image.naturalHeight / rect.height)),
+    };
+  }
+  function scrollDelta(image, displayedDelta) {
+    const rect = image.getBoundingClientRect();
+    return image.naturalHeight > 0 && rect.height > 0 && Number.isFinite(displayedDelta)
+      ? displayedDelta * image.naturalHeight / rect.height : 0;
+  }
   // Inputs are kept only until acknowledged. Ambiguous requests are never replayed.
   class InputQueue {
     constructor(send, onError, delay = 35) {
@@ -49,5 +67,5 @@
       this.timer = null;
     }
   }
-  globalThis.MessengerRemote = {InputQueue};
+  globalThis.MessengerRemote = {InputQueue, mapPoint, scrollDelta};
 })();

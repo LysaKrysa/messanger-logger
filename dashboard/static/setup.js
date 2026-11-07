@@ -62,7 +62,7 @@
   });
   function metadata(data) {
     const screen = $("remote-screen");
-    if (screen.width !== data.width || screen.height !== data.height) { screen.width = data.width; screen.height = data.height; }
+    if (screen.getAttribute("width") !== String(data.width) || screen.getAttribute("height") !== String(data.height)) { screen.width = data.width; screen.height = data.height; }
     $("remote-site").textContent = data.site; ready = data.ready;
     $("facebook-ready").textContent = ready ? "A signed-in session was detected. Confirm below when you have finished Facebook's checks." : "Sign in to Facebook first. Then confirm the connection here.";
     $("finish-facebook").disabled = !ready || !$("approve-session").checked;
@@ -131,8 +131,7 @@
     if (Math.abs(event.clientY - touch.start) > 6) touch.moved = true;
     if (touch.moved) {
       event.preventDefault();
-      const rect = event.currentTarget.getBoundingClientRect();
-      input({action: "scroll", delta: (touch.last - event.clientY) * event.currentTarget.height / rect.height});
+      input({action: "scroll", delta: MessengerRemote.scrollDelta(event.currentTarget, touch.last - event.clientY)});
       touch.last = event.clientY;
     }
   });
@@ -145,8 +144,9 @@
   $("remote-screen").addEventListener("pointercancel", finishTouch);
   $("remote-screen").addEventListener("click", event => {
     if (Date.now() < suppressClickUntil) return;
-    const rect = event.currentTarget.getBoundingClientRect();
-    input({action: "click", x: (event.clientX - rect.left) * event.currentTarget.width / rect.width, y: (event.clientY - rect.top) * event.currentTarget.height / rect.height});
+    const point = MessengerRemote.mapPoint(event.currentTarget, event.clientX, event.clientY);
+    if (!point) return;
+    input({action: "click", ...point});
     $("remote-typing").focus({preventScroll: true});
   });
   const keys = new Set(["Backspace", "Delete", "Enter", "Tab", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
@@ -164,7 +164,13 @@
     if (key) { event.preventDefault(); input({action: "key", key}); }
   });
   $("remote-typing").addEventListener("compositionend", event => { const text = event.target.value; event.target.value = ""; if (text) input({action: "text", text}); });
-  $("remote-screen").addEventListener("wheel", event => { if (active) { event.preventDefault(); input({action: "scroll", delta: event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? event.currentTarget.height : 1)}); } }, {passive: false});
+  $("remote-screen").addEventListener("wheel", event => {
+    if (!active) return;
+    event.preventDefault();
+    const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? event.currentTarget.getBoundingClientRect().height : 1;
+    const delta = MessengerRemote.scrollDelta(event.currentTarget, event.deltaY * unit);
+    if (delta) input({action: "scroll", delta});
+  }, {passive: false});
   $("remote-enter").addEventListener("click", () => input({action: "key", key: "Enter"}));
   $("reload-browser").addEventListener("click", () => input({action: "reload"}));
   $("approve-session").addEventListener("change", () => { $("finish-facebook").disabled = !ready || !$("approve-session").checked; });
