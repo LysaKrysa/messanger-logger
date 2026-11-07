@@ -6,9 +6,47 @@ const vm = require("node:vm");
 const path = require("node:path");
 const context = {setTimeout, clearTimeout};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/remote.js"), "utf8"), context);
-const {InputQueue} = context.MessengerRemote;
+const {InputQueue, mapPoint, scrollDelta} = context.MessengerRemote;
 const plain = value => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+function displayedImage(width, height, scale, left = 37.5, top = -183.25) {
+  return {naturalWidth: width, naturalHeight: height,
+    width: Math.round(width * scale), height: Math.round(height * scale),
+    getBoundingClientRect: () => ({left, top, width: width * scale, height: height * scale})};
+}
+
+test("clicks map to frame pixels across desktop/mobile sizes, zoom and page offsets", () => {
+  for (const [width, height] of [[1024, 768], [432, 800]]) {
+    for (const scale of [.3, .75, 1, 1.075, 1.5]) {
+      const image = displayedImage(width, height, scale);
+      const rect = image.getBoundingClientRect();
+      for (const [x, y] of [[10, 10], [width / 2, height / 2], [width - 10, height - 10]]) {
+        const point = mapPoint(image, rect.left + x * scale, rect.top + y * scale);
+        assert.ok(Math.abs(point.x - x) < .000001);
+        assert.ok(Math.abs(point.y - y) < .000001);
+      }
+    }
+  }
+});
+
+test("unloaded, collapsed and outside-frame clicks are ignored instead of sent to an edge", () => {
+  const image = displayedImage(1024, 768, .5, 100, 200);
+  for (const [x, y] of [[99, 200], [100, 199], [613, 200], [100, 585], [NaN, 200]]) assert.equal(mapPoint(image, x, y), null);
+  assert.equal(mapPoint({...image, naturalWidth: 0}, 100, 200), null);
+  assert.equal(mapPoint(displayedImage(1024, 768, 0), 100, 200), null);
+  assert.deepEqual(plain(mapPoint(image, 612, 584)), {x: 1023, y: 767});
+});
+
+test("touch and wheel distances scale with the visible frame and preserve direction", () => {
+  for (const scale of [.3, .75, 1.5]) {
+    const image = displayedImage(1024, 768, scale);
+    assert.ok(Math.abs(scrollDelta(image, 80 * scale) - 80) < .000001);
+    assert.ok(Math.abs(scrollDelta(image, -80 * scale) + 80) < .000001);
+  }
+  assert.equal(scrollDelta(displayedImage(1024, 768, 0), 100), 0);
+  assert.equal(scrollDelta({...displayedImage(1024, 768, .5), naturalHeight: 0}, 100), 0);
+});
 
 test("rapid text and wheel bursts coalesce without crossing click/key boundaries", async () => {
   const sent = [];

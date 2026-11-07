@@ -13,6 +13,11 @@
 
 ## Remote browser responsiveness
 
+- Geometry tests cover intrinsic frame dimensions versus CSS display size,
+  mobile/desktop frames, zoom, page offsets, frame edges and unloaded images.
+- The real HTTPS guest flow submits taps/clicks at four viewport/zoom settings,
+  then applies the submitted coordinates to small buttons in the source browser
+  and checks actual hits without lost or duplicate clicks.
 - Live-view tests cover binary JPEG streaming, no-cache/same-origin headers,
   guest authorization, active revocation/expiry, and bounded stream concurrency.
 - Input tests cover bounded batches, validation before dispatch, Unicode,

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — accurate remote clicks after scaling
+
+- Map clicks using the decoded frame's intrinsic dimensions, fixing displaced
+  input when responsive CSS or zoom changes the image's displayed size.
+- Apply the same scale to touch and wheel scrolling, ignore clicks before a
+  frame loads, and avoid rewriting image attributes on every metadata update.
+- Test small source-page targets through actual guest taps/clicks at mobile,
+  desktop and zoomed sizes, alongside geometry and ordered-input regressions.
+
 ## Unreleased — load Arkose MatchKey verification
 
 - Support four specific Arkose API, frame and CDN hosts in both browser egress

@@ -253,6 +253,11 @@ No frames are recorded. Revocation, completion and expiry close an open stream,
 and stream concurrency is bounded so inputs and administrator requests retain
 available web threads.
 
+Clicks and scrolling use the decoded frame's intrinsic dimensions, so the
+display can shrink on mobile or change with page zoom without moving the remote
+click target. An older viewer used the CSS display dimensions for both sides
+of this conversion, causing misplaced clicks when the image was scaled.
+
 Facebook can show Google reCAPTCHA or Arkose Labs MatchKey for verification;
 the provider named in the Meta notice can differ between sessions. Older
 browser releases blocked these dependencies, leaving the notice with no challenge.

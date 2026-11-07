@@ -23,9 +23,14 @@ class OfflineBrowser:
 
 def verify(browser, admin, origin, store, offline, output):
     fixture = browser.new_page(viewport={"width": 1024, "height": 768})
-    fixture.set_content("<body style='margin:0;background:#edf2ed;color:#173626;font-family:Arial;padding:70px'><p>OFFLINE BROWSER FIXTURE · SYNTHETIC DATA</p><h1>A real browser, a private connection.</h1><p>This screenshot tests the remote viewport. No Facebook login took place.</p><label>Example field <input value='Synthetic input only'></label></body>")
+    fixture.set_content("""<body style='margin:0;background:#edf2ed;color:#173626;font-family:Arial;padding:70px'>
+<p>OFFLINE BROWSER FIXTURE · SYNTHETIC DATA</p><h1>A real browser, a private connection.</h1>
+<p>This screenshot tests the remote viewport. No Facebook login took place.</p>
+<label>Example field <input value='Synthetic input only'></label>
+<button id='target-a' style='position:absolute;left:92px;top:288px;width:24px;height:24px;padding:0' onclick='this.dataset.hits=String(Number(this.dataset.hits||0)+1)'>A</button>
+<button id='target-b' style='position:absolute;left:500px;top:372px;width:24px;height:24px;padding:0' onclick='this.dataset.hits=String(Number(this.dataset.hits||0)+1)'>B</button>
+<button id='target-c' style='position:absolute;left:908px;top:664px;width:24px;height:24px;padding:0' onclick='this.dataset.hits=String(Number(this.dataset.hits||0)+1)'>C</button></body>""")
     offline.frame = base64.b64encode(fixture.screenshot(type="jpeg")).decode()
-    fixture.close()
     admin.set_viewport_size({"width": 1440, "height": 1100})
     admin.goto(origin + "/setup-links")
     admin.get_by_label("Label", exact=False).fill("For Quinn")
@@ -33,7 +38,7 @@ def verify(browser, admin, origin, store, offline, output):
     link = admin.locator("#setup-invite").input_value()
     assert "#" in link and "?" not in link
     admin.screenshot(path=str(output / "setup-links.png"), full_page=True)
-    guest_context = browser.new_context(ignore_https_errors=True, viewport={"width": 1440, "height": 1100})
+    guest_context = browser.new_context(ignore_https_errors=True, has_touch=True, viewport={"width": 1440, "height": 1100})
     guest_context.route("**/*", lambda route: route.continue_() if route.request.url.startswith(origin + "/") else route.abort())
     guest = guest_context.new_page()
     errors = []
@@ -61,6 +66,32 @@ def verify(browser, admin, origin, store, offline, output):
     assert count_frames() == paused, "Hidden viewer continued capturing frames"
     guest.evaluate("Object.defineProperty(document, 'hidden', {configurable:true, get:()=>false}); document.dispatchEvent(new Event('visibilitychange'))")
     guest.wait_for_function("() => document.getElementById('remote-screen').naturalWidth > 0")
+    # The displayed frame and remote browser have different coordinate spaces.
+    # Apply the UI's actual submitted clicks to small targets in the source page;
+    # an incorrect scale misses the real button rather than only failing a formula.
+    for index, (width, zoom, touch) in enumerate(((390, 1, True), (1440, 1, False), (1280, .8, False), (1024, 1.25, False)), 1):
+        guest.set_viewport_size({"width": width, "height": 1100})
+        guest.evaluate("zoom => document.documentElement.style.zoom = String(zoom)", zoom)
+        screen = guest.locator("#remote-screen")
+        for target in ("target-a", "target-b", "target-c"):
+            source = fixture.locator("#" + target).bounding_box()
+            displayed = screen.bounding_box()
+            x, y = source["x"] + source["width"] / 2, source["y"] + source["height"] / 2
+            before_click = len(offline.calls)
+            position = {"x": x * displayed["width"] / 1024, "y": y * displayed["height"] / 768}
+            with guest.expect_response(lambda response: response.url.endswith("/setup/api/input") and response.request.method == "POST") as received:
+                if touch:
+                    screen.tap(position=position)
+                else:
+                    screen.click(position=position)
+            assert received.value.ok
+            events = [event for _, action, payload in offline.calls[before_click:] if action == "input" for event in payload["events"]]
+            clicks = [event for event in events if event["action"] == "click"]
+            assert len(clicks) == 1, "A displayed click was lost or duplicated"
+            fixture.mouse.click(clicks[0]["x"], clicks[0]["y"])
+            assert fixture.locator("#" + target).get_attribute("data-hits") == str(index), "A scaled viewer click missed its source target"
+    guest.evaluate("document.documentElement.style.zoom = ''")
+    fixture.close()
     guest.locator("#remote-typing").fill("SYNTHETIC_REMOTE_INPUT")
     guest.set_viewport_size({"width": 1280, "height": 1100})
     guest.screenshot(path=str(output / "guest-browser.png"), full_page=True)
