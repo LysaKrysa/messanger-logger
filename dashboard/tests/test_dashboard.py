@@ -2,18 +2,23 @@
 from __future__ import annotations
 
 import io
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 import time
 
 from cryptography.fernet import Fernet
+from werkzeug.datastructures import MultiDict
+from werkzeug.serving import make_server
 
 from dashboard.store import Store, DashboardError
 from dashboard.web import create_app
@@ -22,6 +27,7 @@ from dashboard.manager import Manager, LABEL
 from dashboard.cli import import_existing, read_env
 from event_store import EventStore
 from telegram_relay import TelegramRelay
+from media_saver import MediaSaver
 
 TOKEN = "123456:" + "SYNTHETIC_DASHBOARD_TOKEN_NOT_REAL" * 2
 COOKIES = json.dumps({"c_user": "111222333", "xs": "SYNTHETIC_XS_PRIVATE", "datr": "SYNTHETIC_DATR_PRIVATE"})
@@ -320,6 +326,64 @@ class BrokerTests(Base):
         self.assertEqual(response.status_code, 403)
         self.assertEqual(len(self.api.calls), 1)
 
+    def test_binary_uploads_larger_than_the_parser_chunk_keep_exact_bytes(self):
+        from email.parser import BytesParser
+        from email.policy import default
+        for size in (32768, 65536, 1024 * 1024, 5 * 1024 * 1024):
+            with self.subTest(size=size):
+                self.api.calls.clear()
+                content = bytes(range(256)) * (size // 256)
+                response = self.client.post("/telegram/sendDocument", data={
+                    "chat_id": "87654321", "caption": "Synthetic file",
+                    "document": (io.BytesIO(content), "fixture.bin"),
+                }, headers={"Authorization": "Bearer " + self.key})
+                self.addCleanup(response.close)
+                self.addCleanup(response.request.environ["wsgi.input"].close)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(len(self.api.calls), 1)
+                method, body, options = self.api.calls[0]
+                parsed = BytesParser(policy=default).parsebytes(("MIME-Version: 1.0\r\nContent-Type: " + options["content_type"] + "\r\n\r\n").encode() + body)
+                files = [part for part in parsed.iter_parts() if part.get_param("name", header="content-disposition") == "document"]
+                self.assertEqual(files[0].get_payload(decode=True), content)
+                self.assertEqual(method, "sendDocument")
+                self.assertEqual(options["length"], len(body))
+
+    def test_upload_fields_keep_the_original_32k_byte_limit(self):
+        for caption in ("X" * 32769, "🙂" * 9000):
+            with self.subTest(characters=len(caption)):
+                response = self.client.post("/telegram/sendDocument", data={
+                    "chat_id": "87654321", "caption": caption,
+                    "document": (io.BytesIO(b"SYNTHETIC_FILE" * 10000), "fixture.bin"),
+                }, headers={"Authorization": "Bearer " + self.key})
+                self.addCleanup(response.close)
+                self.assertEqual(response.status_code, 413)
+                self.assertEqual(response.json["error_code"], 413)
+        self.assertEqual(self.api.calls, [])
+
+    def test_parser_part_and_body_limits_remain_definite_rejections(self):
+        data = MultiDict([("chat_id", "87654321"), *( ("extra-" + str(index), "X") for index in range(12)),
+                          ("document", (io.BytesIO(b"SYNTHETIC"), "fixture.bin"))])
+        response = self.client.post("/telegram/sendDocument", data=data, headers={"Authorization": "Bearer " + self.key})
+        self.addCleanup(response.close)
+        self.assertEqual(response.status_code, 413)
+        self.app.config["MAX_CONTENT_LENGTH"] = 1024
+        response = self.client.post("/telegram/sendDocument", data={
+            "chat_id": "87654321", "document": (io.BytesIO(b"X" * 2048), "fixture.bin"),
+        }, headers={"Authorization": "Bearer " + self.key})
+        self.addCleanup(response.close)
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.json["error_code"], 413)
+        self.assertEqual(self.api.calls, [])
+
+    def test_individual_file_limit_stays_in_force(self):
+        with patch("dashboard.broker.MAX_FILE", 65536):
+            response = self.client.post("/telegram/sendDocument", data={
+                "chat_id": "87654321", "document": (io.BytesIO(b"X" * 65537), "fixture.bin"),
+            }, headers={"Authorization": "Bearer " + self.key})
+        self.addCleanup(response.close)
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(self.api.calls, [])
+
     def test_pairing_receiver_checks_private_identity_and_is_idempotent(self):
         other = self.store.add_account("Other")
         token = self.store.invite(other).split("start=")[1]
@@ -502,6 +566,70 @@ class MigrationTests(Base):
 
 
 class GatewayIntegrationTests(Base):
+    def test_view_once_download_uploads_once_through_the_real_loopback_gateway(self):
+        from email.parser import BytesParser
+        from email.policy import default
+        ident = self.paired()
+        row = self.store.account(ident, private=True)
+        api = FakeAPI()
+        server = make_server("127.0.0.1", 0, broker_app(self.store, api), threaded=True)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        image = b"\xff\xd8\xff" + bytes(range(256)) * 4096
+        class Download:
+            def call(self, method, parameters, **options):
+                return {"data": base64.b64encode(image).decode()}
+        archive = EventStore(self.root / "view-once-archive", own_id="111222333", started_at=1000, run_id="view-once-test")
+        relay = saver = None
+        try:
+            env = {"TELEGRAM_ENABLED": "true", "TELEGRAM_TOPICS": "false", "TELEGRAM_MODE": "deleted",
+                   "TELEGRAM_VIEW_ONCE": "true", "TELEGRAM_SEND_MEDIA": "true",
+                   "TELEGRAM_RELAY_URL": "http://127.0.0.1:" + str(server.server_port),
+                   "TELEGRAM_ACCOUNT_KEY": self.store.worker_key(row), "TELEGRAM_BOT_ID": "123456", "TELEGRAM_CHAT_ID": str(row["chat_id"])}
+            reports = []
+            with patch.dict(os.environ, env, clear=True):
+                relay = TelegramRelay(reports.append, archive)
+            relay.interval = 0
+            saver = MediaSaver(Download(), archive, reports.append, threading.Event(), on_update=relay.media_updated)
+            saver.start()
+            event = {"type": "e2eeMessage", "timestamp": 1001000, "data": {
+                "id": "synthetic-once", "threadId": 42, "senderId": 222, "timestampMs": 1001000,
+                "attachments": [{"type": "image", "viewOnce": True, "viewMode": "once", "mimeType": "image/jpeg",
+                    "fileSize": len(image), "directPath": "/synthetic/view-once", "mediaKey": base64.b64encode(b"K" * 32).decode(),
+                    "mediaSha256": base64.b64encode(hashlib.sha256(image).digest()).decode()}]}}
+            summary = archive.accept(event)
+            relay.submit(summary)
+            saver.submit(event, summary)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and (not api.calls or saver.items.unfinished_tasks or relay.items.unfinished_tasks):
+                time.sleep(.01)
+            self.assertEqual(saver.saved, 1)
+            self.assertEqual(saver.items.unfinished_tasks, 0)
+            self.assertEqual(relay.items.unfinished_tasks, 0)
+            self.assertEqual(len(api.calls), 1)
+            method, body, options = api.calls[0]
+            self.assertEqual(method, "sendDocument")
+            self.assertEqual(options["chat"], row["chat_id"])
+            self.assertEqual(options["length"], len(body))
+            parsed = BytesParser(policy=default).parsebytes(("MIME-Version: 1.0\r\nContent-Type: " + options["content_type"] + "\r\n\r\n").encode() + body)
+            fields = {part.get_param("name", header="content-disposition"): part.get_payload(decode=True) for part in parsed.iter_parts()}
+            self.assertEqual(fields["document"], image)
+            self.assertIn(b"View-once", fields["caption"])
+            relay.media_updated("42", "synthetic-once")
+            deadline = time.monotonic() + 2
+            while relay.items.unfinished_tasks and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertEqual(len(api.calls), 1)
+        finally:
+            if saver is not None:
+                saver.close()
+            if relay is not None:
+                relay.close()
+            archive.close()
+            server.shutdown()
+            thread.join(timeout=5)
+            server.server_close()
+
     def test_two_real_relays_route_separate_archives_through_one_gateway(self):
         first = self.paired()
         second = self.paired(22222222, COOKIES.replace("111222333", "444555666"))

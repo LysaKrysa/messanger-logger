@@ -1,5 +1,17 @@
 # Validation
 
+## Shared Telegram media uploads
+
+- Reproduced the old failure with 32 KiB, 64 KiB, 256 KiB and 1 MiB synthetic
+  files: HTTP 502 with zero upstream requests. A 16 KiB file succeeded.
+- Exact binary upload regressions cover 32 KiB through 5 MiB; text fields,
+  file/body size and multipart part-count limits remain enforced as HTTP 413
+  before any upstream send. Destination/isolation and ambiguous-outcome tests remain.
+- A real loopback HTTP test downloads an encrypted view-once fixture with SHA-256
+  validation, saves it privately and forwards its exact bytes once through the
+  shared gateway to a fake Telegram API. A repeated callback does not resend.
+  No real photos, Facebook session or Telegram message are used.
+
 ## Facebook-to-Telegram handoff recovery
 
 - The real HTTPS guest fixture injects a transient viewer error and a failed

@@ -187,6 +187,22 @@ poller/webhook deliberately before using invitations. Outbound sends are paced
 centrally and every account has a request limit. Ambiguous delivery outcomes
 are not automatically resent. The existing topic-missing repair remains active.
 
+## Telegram media uploads
+
+An older shared gateway rejected normal image/file multipart requests at about
+32 KiB before contacting Telegram, then reported the parser exception as HTTP 502.
+This did not affect local media saving. The corrected gateway allows a bounded
+multipart decoder window while retaining the 32 KiB text-field limit, file and
+body limits, part count, destination checks and no ambiguous automatic resend.
+Parser/size errors retain their real HTTP 4xx status.
+
+For this fix, install `dashboard/broker.py` from the updated revision into
+`/opt/messenger-dashboard/app/dashboard/broker.py`, keeping a backup, and run
+`sudo systemctl restart messenger-dashboard-bot`. Existing logger workers can
+keep running. Test a fresh incoming attachment after the gateway is ready.
+Previously failed sends are not automatically replayed; saved files remain
+available locally until their normal 72-hour retention expires.
+
 ## One-time setup links
 
 Open **Setup links** and choose **Generate setup link**. A label is optional.

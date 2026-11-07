@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from flask import Flask, jsonify, request
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 
 from .store import DashboardError, from_environment
 
@@ -22,6 +23,10 @@ METHODS = {
     "sendDocument": {"chat_id", "message_thread_id", "caption", "caption_entities", "disable_notification"},
 }
 MAX_FILE = 50_000_000
+MAX_FORM_FIELD = 32768
+# Werkzeug reads multipart input in 64 KiB chunks. This decoder window must
+# fit a chunk plus boundary/header tails, independently of each text field.
+MULTIPART_MEMORY = 128 * 1024
 
 
 class BotUnavailable(RuntimeError):
@@ -173,7 +178,7 @@ def validate_destination(method, params, account, bot):
 
 def create_app(store=None, api=None):
     app = Flask(__name__)
-    app.config.update(MAX_CONTENT_LENGTH=MAX_FILE + 131072, MAX_FORM_MEMORY_SIZE=32768, MAX_FORM_PARTS=12)
+    app.config.update(MAX_CONTENT_LENGTH=MAX_FILE + 131072, MAX_FORM_MEMORY_SIZE=MULTIPART_MEMORY, MAX_FORM_PARTS=12)
     store = store or from_environment()
     api = api or TelegramAPI(store)
     app.extensions.update(store=store, telegram=api, pairing=PairingReceiver(store, api))
@@ -201,6 +206,8 @@ def create_app(store=None, api=None):
                 if set(request.files) != {"document"} or len(request.files.getlist("document")) != 1 or any(len(request.form.getlist(key)) != 1 for key in request.form):
                     raise DashboardError("Upload fields are not permitted.")
                 params = request.form.to_dict()
+                if any(len(value.encode("utf-8")) > MAX_FORM_FIELD for value in params.values()):
+                    raise RequestEntityTooLarge()
                 validate_destination(method, params, account, bot)
                 upload = request.files["document"]
                 upload.stream.seek(0, 2)
@@ -233,6 +240,10 @@ def create_app(store=None, api=None):
             return jsonify(payload), status if 100 <= status <= 599 else 502
         except DashboardError:
             return jsonify(ok=False, error_code=403, description="Gateway request is not permitted"), 403
+        except HTTPException:
+            # Parsing/size rejections happen before delivery. Let Flask retain
+            # the real 4xx status rather than labelling them ambiguous sends.
+            raise
         except Exception:
             # A network outcome is unconfirmed, never a definitive Telegram 4xx.
             return jsonify(ok=False, error_code=502, description="Gateway delivery outcome is unconfirmed"), 502

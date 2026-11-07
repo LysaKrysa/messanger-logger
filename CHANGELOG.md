@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased — fix shared Telegram media uploads
+
+- Fix valid media uploads being rejected before delivery when the multipart
+  decoder's memory window was smaller than its input chunk size.
+- Keep the 32 KiB text-field limit separately from the bounded decoder window;
+  preserve file/body/part limits and account destination checks.
+- Preserve parser and size rejections as HTTP 4xx instead of masking them as
+  ambiguous HTTP 502 failures. Unknown delivery outcomes still are not replayed.
+- Test exact binary uploads from 32 KiB through 5 MiB and an encrypted view-once
+  fixture through download, local storage and the real loopback gateway.
+
 ## Unreleased — recover the Facebook-to-Telegram handoff
 
 - Keep reading saved setup progress while the viewer is active or confirmation
