@@ -274,6 +274,19 @@ display can shrink on mobile or change with page zoom without moving the remote
 click target. An older viewer used the CSS display dimensions for both sides
 of this conversion, causing misplaced clicks when the image was scaled.
 
+On phones and coarse-pointer devices, the large local typing box is collapsed.
+Tap the desired field in the remote view and type; **Keyboard** can refocus the
+phone keyboard, **Enter** submits to the remote page, and **Done** dismisses it.
+**Typing box** reveals an ordinary local input for manual paste/accessibility.
+The default input stays focusable but visually transparent, positioned inside
+the visual viewport rather than below the remote image. Prevent-scroll focus
+and a brief focus guard avoid jumping to that old box; a new gesture or blur
+cancels the guard so the page remains scrollable. The operating system controls
+its keyboard and viewport resizing, so test on the intended phones.
+Local autocorrection is disabled, composition commits once before sending text,
+and intermediate IME Enter/deletion events are not forwarded. Input remains
+transient; switching invitations, completing setup or cancelling clears it.
+
 During **Connect & continue**, the viewer pauses and the confirmation button
 stays disabled. The page checks saved setup progress even while the browser
 is active, and moves to Telegram once confirmation is committed, including

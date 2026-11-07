@@ -1,5 +1,17 @@
 # Validation
 
+## Mobile keyboard and focus
+
+- JavaScript regressions cover positioning inside a shifted/reduced visual
+  viewport, bounded correction of a browser focus jump, cancellation by user
+  gestures/blur, disabled inputs and the visible typing fallback.
+- Mobile-sized Chromium and WebKit fixtures check a transparent in-viewport
+  typing target, stable page position after a tap, reduced viewport positioning,
+  intentional scrolling, composition without an early Enter/duplicate text,
+  Done, visible paste fallback and no horizontal overflow.
+- These are headless fixtures using synthetic text. A physical iOS/Android
+  software keyboard is not emulated; opening/dismissing it needs phone retest.
+
 ## Shared Telegram media uploads
 
 - Reproduced the old failure with 32 KiB, 64 KiB, 256 KiB and 1 MiB synthetic

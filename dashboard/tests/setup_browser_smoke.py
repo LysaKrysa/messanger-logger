@@ -8,6 +8,7 @@ from dashboard.store import DashboardError
 class OfflineBrowser:
     def __init__(self):
         self.frame, self.sessions, self.calls = "", set(), []
+        self.width, self.height = 1024, 768
         self.fail_next_input = self.fail_metadata = self.lose_finish_response = self.stopping = False
         self.stop_delay = 0
 
@@ -29,7 +30,7 @@ class OfflineBrowser:
             assert ident in self.sessions
             if self.fail_metadata and (data or {}).get("metadata_only"):
                 raise DashboardError("Synthetic temporary viewer failure")
-            return {"jpeg": self.frame, "site": "offline.invalid", "ready": True, "width": 1024, "height": 768}
+            return {"jpeg": self.frame, "site": "offline.invalid", "ready": True, "width": self.width, "height": self.height}
         elif action == "input" and self.fail_next_input:
             self.fail_next_input = False
             raise DashboardError("Synthetic input acknowledgement lost")

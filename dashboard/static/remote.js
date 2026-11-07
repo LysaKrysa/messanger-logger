@@ -18,6 +18,55 @@
     return image.naturalHeight > 0 && rect.height > 0 && Number.isFinite(displayedDelta)
       ? displayedDelta * image.naturalHeight / rect.height : 0;
   }
+  function keyboardPosition(viewport, width, height) {
+    const x = viewport?.offsetLeft || 0, y = viewport?.offsetTop || 0;
+    return {x: x + Math.min(8, Math.max(0, (viewport?.width || width) - 1)),
+      y: y + Math.min(8, Math.max(0, (viewport?.height || height) - 1))};
+  }
+  class KeyboardFocus {
+    constructor(input, win, compact) {
+      this.input = input; this.win = win; this.compact = compact;
+      this.anchor = null; this.timer = null;
+      const cancel = () => this.cancel();
+      const sync = () => this.sync();
+      // A short focus guard must never fight an intentional page gesture.
+      for (const event of ["pointerdown", "touchmove", "wheel", "orientationchange"]) win.addEventListener(event, cancel, {passive: true});
+      win.addEventListener("scroll", sync, {passive: true});
+      win.visualViewport?.addEventListener("resize", sync);
+      win.visualViewport?.addEventListener("scroll", sync);
+      input.addEventListener("blur", cancel);
+    }
+    cancel() {
+      this.anchor = null;
+      if (this.timer !== null) this.win.clearTimeout(this.timer);
+      this.timer = null;
+    }
+    sync() {
+      if (this.win.document.activeElement !== this.input) { this.cancel(); return; }
+      if (this.compact()) {
+        const point = keyboardPosition(this.win.visualViewport, this.win.innerWidth, this.win.innerHeight);
+        this.input.style.setProperty("--keyboard-x", point.x + "px");
+        this.input.style.setProperty("--keyboard-y", point.y + "px");
+      }
+      if (this.anchor && (Math.abs(this.win.scrollX - this.anchor.x) > 1 || Math.abs(this.win.scrollY - this.anchor.y) > 1)) {
+        this.win.scrollTo({left: this.anchor.x, top: this.anchor.y, behavior: "instant"});
+      }
+    }
+    focus() {
+      if (this.input.disabled) return;
+      this.cancel();
+      if (this.compact()) {
+        const point = keyboardPosition(this.win.visualViewport, this.win.innerWidth, this.win.innerHeight);
+        this.input.style.setProperty("--keyboard-x", point.x + "px");
+        this.input.style.setProperty("--keyboard-y", point.y + "px");
+        this.anchor = {x: this.win.scrollX, y: this.win.scrollY};
+        this.timer = this.win.setTimeout(() => this.cancel(), 900);
+      }
+      // Keep focus synchronous with the user's tap so iOS can open its keyboard.
+      this.input.focus({preventScroll: true});
+      this.sync();
+    }
+  }
   // Inputs are kept only until acknowledged. Ambiguous requests are never replayed.
   class InputQueue {
     constructor(send, onError, delay = 35) {
@@ -67,5 +116,5 @@
       this.timer = null;
     }
   }
-  globalThis.MessengerRemote = {InputQueue, mapPoint, scrollDelta};
+  globalThis.MessengerRemote = {InputQueue, mapPoint, scrollDelta, KeyboardFocus, keyboardPosition};
 })();
