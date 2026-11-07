@@ -62,8 +62,12 @@ element.dispatchEvent(new InputEvent('input', {data:'日本語', inputType:'inse
         assert events == [{"action": "text", "text": "日本語"}], "Composition was submitted early or duplicated"
         # Intentional page scrolling must remain possible while the proxy has focus.
         before_scroll = guest.evaluate("scrollY")
-        guest.mouse.move(5, 200)
-        guest.mouse.wheel(0, 70)
+        if engine == "webkit":
+            # Playwright does not implement mouse wheel input in mobile WebKit.
+            guest.evaluate("window.dispatchEvent(new Event('touchmove')); window.scrollBy(0, 70)")
+        else:
+            guest.mouse.move(5, 200)
+            guest.mouse.wheel(0, 70)
         guest.wait_for_function("before => scrollY > before + 10", arg=before_scroll)
         guest.locator("#remote-done").click()
         assert not proxy.evaluate("element => element === document.activeElement")
