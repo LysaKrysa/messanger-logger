@@ -18,6 +18,7 @@ from werkzeug.serving import make_server
 from dashboard.store import Store
 from dashboard.web import create_app
 from dashboard.tests.setup_browser_smoke import OfflineBrowser, verify as verify_setup
+from dashboard.tests.keyboard_browser_smoke import verify as verify_keyboard
 
 
 def main():
@@ -95,8 +96,11 @@ def main():
                 assert not page.evaluate("document.documentElement.scrollWidth > innerWidth"), "Mobile horizontal overflow"
                 assert not errors, errors
                 verify_setup(browser, page, origin, store, offline, output)
+                verify_keyboard(browser, page, origin, offline, output, "chromium")
+                with playwright.webkit.launch(headless=True) as webkit:
+                    verify_keyboard(webkit, page, origin, offline, output, "webkit")
                 browser.close()
-            print("Browser smoke test passed: sign-in, account creation, hidden cookies, invitation, approval, start, and mobile layout.")
+            print("Browser smoke test passed: dashboard/guest flow and Chromium/WebKit mobile keyboard, focus, composition and scrolling fixtures. No physical phone keyboard or live Facebook login was used.")
         finally:
             server.shutdown()
             thread.join(timeout=5)

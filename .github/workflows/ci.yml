@@ -65,6 +65,7 @@ jobs:
           if ! command -v google-chrome >/dev/null; then
             python -m playwright install --with-deps chromium
           fi
+          python -m playwright install --with-deps webkit
       - name: Verify administrator flow and mobile layout
         run: python -m dashboard.tests.browser_smoke
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

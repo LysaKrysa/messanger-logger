@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — mobile remote-browser keyboard
+
+- Collapse the large typing box on phones and coarse-pointer devices. Tapping
+  the remote view focuses an invisible input inside the visible viewport, with
+  Keyboard, Enter, Done and optional Typing box controls.
+- Use prevent-scroll focus and a short, cancellable focus guard rather than
+  moving to the below-frame field. Intentional scrolling remains available.
+- Keep local autocorrection off and avoid sending Enter/deletion keys while an
+  IME composition is active. Clear local input when the session changes or ends.
+- Add focus/viewport/gesture unit checks and mobile-sized Chromium/WebKit
+  regressions. Native iOS/Android keyboard behavior still needs device testing.
+
 ## Unreleased — fix shared Telegram media uploads
 
 - Fix valid media uploads being rejected before delivery when the multipart

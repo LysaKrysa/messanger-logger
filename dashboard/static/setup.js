@@ -2,7 +2,18 @@
 (() => {
   const $ = id => document.getElementById(id);
   let csrf = "", active = false, ready = false, frameBusy = false, finished = false, finishing = false, viewGeneration = 0, viewFailures = 0, reconnectTimer = null, fallbackTimer = null, statusBusy = false, progressRequest = null, compatibility = false, errorKind = "";
-  let invitation = location.hash.slice(1);
+  let invitation = location.hash.slice(1), composing = false, typingBoxOpen = false;
+  const compactKeyboard = matchMedia("(max-width: 760px), (pointer: coarse)");
+  const keyboard = new MessengerRemote.KeyboardFocus($("remote-typing"), window, () => compactKeyboard.matches && !typingBoxOpen);
+  const syncKeyboard = () => {
+    $("remote-input").classList.toggle("compact-keyboard", compactKeyboard.matches);
+    $("remote-input").classList.toggle("typing-box-open", typingBoxOpen);
+    $("remote-show-input").setAttribute("aria-expanded", String(typingBoxOpen));
+    $("remote-show-input").textContent = typingBoxOpen ? "Hide typing box" : "Typing box";
+    keyboard.sync();
+  };
+  compactKeyboard.addEventListener("change", syncKeyboard);
+  syncKeyboard();
   const showError = (text, kind = "setup") => { errorKind = kind; $("setup-error").textContent = text; $("setup-error").hidden = false; };
   const hideError = () => { errorKind = ""; $("setup-error").hidden = true; };
   const inputs = new MessengerRemote.InputQueue(events => api("input", {events}), error => showError(error.message));
@@ -16,12 +27,12 @@
     $("remote-screen").removeAttribute("src");
     if (old.startsWith("blob:")) URL.revokeObjectURL(old);
   }
-  function resetInput() { inputs.clear(); $("remote-typing").value = ""; }
+  function resetInput() { inputs.clear(); composing = false; keyboard.cancel(); $("remote-typing").blur(); $("remote-typing").value = ""; }
   function setFinishing(value) {
     finishing = value;
     $("finish-facebook").disabled = value || finished || !ready || !$("approve-session").checked;
     $("finish-facebook").textContent = value ? "Connecting…" : "Connect & continue ↗";
-    for (const id of ["remote-typing", "remote-enter", "reload-browser", "start-browser"]) $(id).disabled = value;
+    for (const id of ["remote-typing", "remote-keyboard", "remote-show-input", "remote-enter", "reload-browser", "start-browser"]) $(id).disabled = value;
   }
 
   addEventListener("hashchange", () => {
@@ -182,23 +193,36 @@
     const point = MessengerRemote.mapPoint(event.currentTarget, event.clientX, event.clientY);
     if (!point) return;
     input({action: "click", ...point});
-    $("remote-typing").focus({preventScroll: true});
+    keyboard.focus();
   });
+  $("remote-keyboard").addEventListener("click", () => { if (active && !finished && !finishing) keyboard.focus(); });
+  $("remote-done").addEventListener("click", () => $("remote-typing").blur());
+  $("remote-show-input").addEventListener("click", () => {
+    typingBoxOpen = !typingBoxOpen;
+    syncKeyboard();
+    if (typingBoxOpen) keyboard.focus();
+    else $("remote-typing").blur();
+  });
+  $("remote-typing").addEventListener("focus", () => $("remote-input").classList.add("keyboard-active"));
+  $("remote-typing").addEventListener("blur", () => $("remote-input").classList.remove("keyboard-active"));
   const keys = new Set(["Backspace", "Delete", "Enter", "Tab", "Escape", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"]);
   $("remote-typing").addEventListener("keydown", event => {
+    if (composing || event.isComposing || event.keyCode === 229) return;
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") { event.preventDefault(); input({action: "key", key: "Control+A"}); }
     else if (keys.has(event.key)) { event.preventDefault(); input({action: "key", key: event.key === "Tab" && event.shiftKey ? "Shift+Tab" : event.key}); }
   });
   $("remote-typing").addEventListener("input", event => {
-    if (event.isComposing) return;
+    if (composing || event.isComposing) return;
     const text = event.target.value; event.target.value = "";
     if (text) input({action: "text", text});
   });
   $("remote-typing").addEventListener("beforeinput", event => {
+    if (composing || event.isComposing) return;
     const key = ({deleteContentBackward: "Backspace", deleteContentForward: "Delete", insertLineBreak: "Enter", insertParagraph: "Enter"})[event.inputType];
     if (key) { event.preventDefault(); input({action: "key", key}); }
   });
-  $("remote-typing").addEventListener("compositionend", event => { const text = event.target.value; event.target.value = ""; if (text) input({action: "text", text}); });
+  $("remote-typing").addEventListener("compositionstart", () => { composing = true; });
+  $("remote-typing").addEventListener("compositionend", event => { composing = false; const text = event.target.value; event.target.value = ""; if (text) input({action: "text", text}); });
   $("remote-screen").addEventListener("wheel", event => {
     if (!active) return;
     event.preventDefault();

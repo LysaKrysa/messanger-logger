@@ -6,9 +6,76 @@ const vm = require("node:vm");
 const path = require("node:path");
 const context = {setTimeout, clearTimeout};
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, "../static/remote.js"), "utf8"), context);
-const {InputQueue, mapPoint, scrollDelta} = context.MessengerRemote;
+const {InputQueue, mapPoint, scrollDelta, KeyboardFocus, keyboardPosition} = context.MessengerRemote;
 const plain = value => JSON.parse(JSON.stringify(value));
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+function keyboardFixture(compact = true) {
+  const events = new Map(), viewportEvents = new Map(), styles = {}, scheduled = new Map();
+  let serial = 0;
+  const win = {
+    document: {activeElement: null}, scrollX: 7, scrollY: 600, innerWidth: 390, innerHeight: 844,
+    addEventListener: (event, handler) => events.set(event, handler),
+    setTimeout: handler => { scheduled.set(++serial, handler); return serial; },
+    clearTimeout: id => scheduled.delete(id),
+    scrollTo: point => { win.scrollX = point.left; win.scrollY = point.top; },
+    visualViewport: {offsetLeft: 0, offsetTop: 0, width: 390, height: 844,
+      addEventListener: (event, handler) => viewportEvents.set(event, handler)},
+  };
+  const input = {disabled: false, style: {setProperty: (key, value) => { styles[key] = value; }},
+    addEventListener: (event, handler) => events.set("input:" + event, handler),
+    focus: options => { input.options = options; win.document.activeElement = input; win.scrollY = 1500; },
+  };
+  return {win, input, events, viewportEvents, styles, scheduled, keyboard: new KeyboardFocus(input, win, () => compact)};
+}
+
+test("mobile keyboard target stays inside a shifted or reduced visual viewport", () => {
+  assert.deepEqual(plain(keyboardPosition({offsetLeft: 20, offsetTop: 50, width: 390, height: 320}, 390, 844)), {x: 28, y: 58});
+  assert.deepEqual(plain(keyboardPosition({offsetLeft: 0, offsetTop: 0, width: 2, height: 2}, 390, 844)), {x: 1, y: 1});
+  assert.deepEqual(plain(keyboardPosition(null, 390, 844)), {x: 8, y: 8});
+});
+
+test("mobile focus corrects a browser's automatic page jump for a bounded interval", () => {
+  const state = keyboardFixture();
+  state.keyboard.focus();
+  assert.equal(state.input.options.preventScroll, true);
+  assert.equal(state.win.scrollY, 600);
+  assert.equal(state.styles["--keyboard-y"], "8px");
+  state.win.scrollY = 1600; state.events.get("scroll")();
+  assert.equal(state.win.scrollY, 600);
+  [...state.scheduled.values()][0]();
+  state.win.scrollY = 700; state.events.get("scroll")();
+  assert.equal(state.win.scrollY, 700);
+});
+
+test("intentional gestures and blur release the mobile focus guard", () => {
+  for (const event of ["pointerdown", "touchmove", "wheel", "orientationchange", "input:blur"]) {
+    const state = keyboardFixture();
+    state.keyboard.focus(); state.events.get(event)();
+    state.win.scrollY = 750; state.events.get("scroll")();
+    assert.equal(state.win.scrollY, 750, event);
+    assert.equal(state.scheduled.size, 0);
+  }
+});
+
+test("keyboard viewport updates move the proxy without locking user scrolling", () => {
+  const state = keyboardFixture();
+  state.keyboard.focus(); state.keyboard.cancel();
+  state.win.visualViewport.offsetTop = 35; state.win.visualViewport.height = 300;
+  state.win.scrollY = 800; state.viewportEvents.get("resize")();
+  assert.equal(state.styles["--keyboard-y"], "43px");
+  assert.equal(state.win.scrollY, 800);
+});
+
+test("visible typing fallback has no page lock and disabled input cannot take focus", () => {
+  const state = keyboardFixture(false);
+  state.keyboard.focus();
+  assert.equal(state.keyboard.anchor, null);
+  assert.equal(state.win.scrollY, 1500);
+  state.win.document.activeElement = null; state.input.disabled = true;
+  state.keyboard.focus();
+  assert.equal(state.win.document.activeElement, null);
+});
 
 function displayedImage(width, height, scale, left = 37.5, top = -183.25) {
   return {naturalWidth: width, naturalHeight: height,
