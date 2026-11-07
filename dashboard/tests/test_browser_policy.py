@@ -3,13 +3,21 @@ import socket
 import unittest
 from unittest.mock import patch
 
-from browser.policy import RECAPTCHA_HOSTS, allowed_host, allowed_url, facebook_url
+from browser.policy import RECAPTCHA_HOSTS, allowed_host, allowed_url, facebook_url, session_url
 from dashboard.browser_proxy import public_addresses
 
 ARKOSE_HOSTS = {"meta-api.arkoselabs.com", "client-api.arkoselabs.com", "iframe.arkoselabs.com", "cdn.arkoselabs.com"}
 
 
 class BrowserPolicyTests(unittest.TestCase):
+    def test_readiness_and_confirmation_use_the_existing_checkpoint_url_boundary(self):
+        for path in ("/login/", "/checkpoint/", "/recover/initiate", "/CHECKPOINT/"):
+            self.assertFalse(session_url("https://www.facebook.com" + path))
+        for url in ("https://www.facebook.com/", "https://m.facebook.com/", "https://www.facebook.com/messages/"):
+            self.assertTrue(session_url(url))
+        for url in ("about:blank", "https://www.google.com/recaptcha/api.js", "https://meta-api.arkoselabs.com/", "http://www.facebook.com/"):
+            self.assertFalse(session_url(url))
+
     def test_specific_arkose_api_frame_and_cdn_are_allowed_in_both_layers(self):
         for host, path in (
             ("meta-api.arkoselabs.com", "/v2/SYNTHETIC-KEY/api.js"),

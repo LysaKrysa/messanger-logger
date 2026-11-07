@@ -150,6 +150,40 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(sum(call[1] == "capture" for call in self.browser.calls), 1)
         self.assertEqual(self.post("start", {}, state).status_code, 400)
 
+    def test_capture_error_after_another_completion_returns_only_this_guests_saved_state(self):
+        state = self.claim()
+        session = self.client.get_cookie(COOKIE, domain="setup.example").value
+        def capture(ident, action, data=None):
+            self.invites.complete(session, COOKIES)
+            raise DashboardError("Synthetic browser already closed")
+        self.browser.call = capture
+        response = self.post("finish", {"approve": True}, state)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["state"], "completed")
+        self.assertEqual(len(self.store.accounts()), 1)
+        self.assertNotIn(COOKIES["xs"], response.text)
+
+    def test_unsaved_capture_failure_stays_claimed_and_never_creates_a_false_completion(self):
+        state = self.claim()
+        original = self.browser.call
+        self.browser.call = Mock(side_effect=DashboardError("Synthetic unavailable"))
+        self.assertEqual(self.post("finish", {"approve": True}, state).status_code, 400)
+        self.assertEqual(self.store.accounts(), [])
+        self.assertEqual(self.client.get("/setup/api/status", base_url=ORIGIN).json["state"], "claimed")
+        self.browser.call = original
+        self.assertEqual(self.post("finish", {"approve": True}, state).json["state"], "completed")
+
+    def test_cleanup_failure_after_commit_does_not_hide_the_telegram_handoff(self):
+        state = self.claim()
+        original = self.browser.call
+        def browser(ident, action, data=None):
+            if action == "stop":
+                raise DashboardError("Synthetic cleanup disconnect")
+            return original(ident, action, data)
+        self.browser.call = browser
+        self.assertEqual(self.post("finish", {"approve": True}, state).json["state"], "completed")
+        self.assertEqual(len(self.store.accounts()), 1)
+
     def test_frame_strips_cookie_and_unexpected_controller_fields(self):
         state = self.claim()
         result = self.post("frame", {}, state)

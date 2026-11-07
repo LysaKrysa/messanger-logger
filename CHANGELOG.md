@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — recover the Facebook-to-Telegram handoff
+
+- Keep reading saved setup progress while the viewer is active or confirmation
+  is pending, so a lost response or slow browser cleanup cannot hide Telegram.
+- Pause the viewer and inputs during confirmation, prevent duplicate submits,
+  bound HTTP waits and recover completed state without automatically resending.
+- Recover from an earlier ambiguous input error only after a fresh read-only
+  readiness check; keep explicit consent and server validation in place.
+- Recreate screenshot sessions after transient target failures, align readiness
+  with the existing confirmation URL checks, and offer reopen after disconnects.
+- Add fault-injected HTTPS handoff coverage and capture/concurrency regressions.
+
 ## Unreleased — accurate remote clicks after scaling
 
 - Map clicks using the decoded frame's intrinsic dimensions, fixing displaced
