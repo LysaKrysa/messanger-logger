@@ -1,10 +1,15 @@
 """Real HTTPS guest UI with synthetic browser data, never a Facebook login."""
 import base64
+import time
+
+from dashboard.store import DashboardError
 
 
 class OfflineBrowser:
     def __init__(self):
         self.frame, self.sessions, self.calls = "", set(), []
+        self.fail_next_input = self.fail_metadata = self.lose_finish_response = self.stopping = False
+        self.stop_delay = 0
 
     def call(self, ident, action, data=None):
         self.calls.append((ident, action, data))
@@ -12,12 +17,22 @@ class OfflineBrowser:
             self.sessions.add(ident)
         elif action == "stop":
             self.sessions.discard(ident)
+            self.stopping = True
+            try:
+                time.sleep(self.stop_delay)
+            finally:
+                self.stopping = False
         elif action == "capture":
             assert ident in self.sessions
             return {"cookies": {"c_user": "7766554433", "xs": "SYNTHETIC_GUEST_SESSION", "datr": "SYNTHETIC_GUEST_DEVICE"}}
         elif action == "frame":
             assert ident in self.sessions
+            if self.fail_metadata and (data or {}).get("metadata_only"):
+                raise DashboardError("Synthetic temporary viewer failure")
             return {"jpeg": self.frame, "site": "offline.invalid", "ready": True, "width": 1024, "height": 768}
+        elif action == "input" and self.fail_next_input:
+            self.fail_next_input = False
+            raise DashboardError("Synthetic input acknowledgement lost")
         return {"started": True}
 
 
@@ -92,12 +107,34 @@ def verify(browser, admin, origin, store, offline, output):
             assert fixture.locator("#" + target).get_attribute("data-hits") == str(index), "A scaled viewer click missed its source target"
     guest.evaluate("document.documentElement.style.zoom = ''")
     fixture.close()
-    guest.locator("#remote-typing").fill("SYNTHETIC_REMOTE_INPUT")
+    offline.fail_metadata = True
+    guest.locator("#setup-error").wait_for(state="visible")
+    offline.fail_metadata = False
+    guest.locator("#setup-error").wait_for(state="hidden")
+    with guest.expect_response(lambda response: response.url.endswith("/setup/api/input") and response.request.method == "POST"):
+        guest.locator("#remote-typing").fill("SYNTHETIC_REMOTE_INPUT")
     guest.set_viewport_size({"width": 1280, "height": 1100})
     guest.screenshot(path=str(output / "guest-browser.png"), full_page=True)
+    offline.fail_next_input = True
+    with guest.expect_response(lambda response: response.url.endswith("/setup/api/input") and response.request.method == "POST") as failed_input:
+        guest.locator("#remote-enter").click()
+    assert failed_input.value.status == 400
+    guest.locator("#setup-error").wait_for(state="visible")
     guest.locator("#approve-session").check()
-    guest.get_by_role("button", name="Connect & continue").click()
-    guest.locator("#telegram-invite").wait_for(state="visible")
+    offline.stop_delay = 6
+    offline.lose_finish_response = True
+    with guest.expect_response(lambda response: response.url.endswith("/setup/api/finish") and response.request.method == "POST") as lost_finish:
+        # A second explicit click while pending must not send a second request.
+        guest.evaluate("document.getElementById('finish-facebook').click(); document.getElementById('finish-facebook').click()")
+        guest.locator("#telegram-invite").wait_for(state="visible", timeout=5000)
+        assert offline.stopping, "Handoff waited for browser cleanup instead of reading the saved connection"
+    assert lost_finish.value.status == 503
+    guest.wait_for_timeout(200)
+    assert guest.locator("#setup-error").is_hidden()
+    assert sum(action == "capture" for _, action, _ in offline.calls) == 1
+    assert sum(event.get("action") == "key" and event.get("key") == "Enter" for _, action, payload in offline.calls if action == "input" for event in payload["events"]) == 1
+    offline.stop_delay = 0
+    offline.lose_finish_response = False
     telegram = guest.locator("#telegram-invite").get_attribute("href")
     assert telegram.startswith("https://t.me/")
     assert "SYNTHETIC_GUEST_SESSION" not in guest.content()

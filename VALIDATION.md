@@ -1,5 +1,17 @@
 # Validation
 
+## Facebook-to-Telegram handoff recovery
+
+- The real HTTPS guest fixture injects a transient viewer error and a failed
+  input acknowledgement, delays browser cleanup for six seconds after commit,
+  and replaces the finish response with HTTP 503. The UI must show Telegram
+  while cleanup is pending, without a refresh, repeated input or duplicate capture.
+- Server tests cover capture failure racing with an already committed completion,
+  cleanup failure after commit and an unsaved failure staying incomplete.
+- Capture tests cover detached targets, changed pages, failed attachment/detach
+  and malformed frames. URL tests keep readiness and confirmation aligned with
+  the existing login/checkpoint/recovery boundary. No unconfirmed login is saved.
+
 ## Verification challenge dependencies
 
 - Shared policy tests cover the documented reCAPTCHA scripts, frames and payloads,

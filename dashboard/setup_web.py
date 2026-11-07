@@ -201,8 +201,16 @@ def install(app, store, origin, browser=None):
         if not isinstance(data, dict) or data.get("approve") is not True:
             raise DashboardError("Approve connecting this Facebook session before continuing.")
         if row["state"] == "claimed":
-            captured = browser.call(row["id"], "capture")
-            invitations.complete(token, captured.get("cookies"))
+            try:
+                captured = browser.call(row["id"], "capture")
+                invitations.complete(token, captured.get("cookies"))
+            except DashboardError:
+                # Another explicit finish request may already have committed
+                # and closed the browser. Read this guest's saved state only.
+                saved = invitations.session(token)
+                if saved and saved["state"] == "completed":
+                    return jsonify(invitations.progress(token))
+                raise
             try:
                 browser.call(row["id"], "stop")
             except DashboardError:

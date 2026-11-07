@@ -16,7 +16,8 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import sync_playwright
 from events import normalize
-from policy import allowed_url, facebook_url
+from capture import FrameCapture
+from policy import allowed_url, session_url
 
 COOKIE_NAMES = {"c_user", "xs", "datr", "fr", "sb", "wd", "presence", "ps_l", "ps_n"}
 
@@ -61,7 +62,7 @@ def main():
         context.route("**/*", lambda route: route.continue_() if allowed_url(route.request.url) else route.abort())
         page = context.new_page()
         context.set_default_timeout(10000)
-        capture_page, capture_session = None, None
+        capture = FrameCapture(context)
         ready, checked_at = False, 0.0
 
         def apply_input(event):
@@ -110,22 +111,11 @@ def main():
                         cookies = {c["name"]: c["value"] for c in context.cookies(["https://www.facebook.com/"]) if c["name"] in COOKIE_NAMES}
                         ready = all(cookies.get(k) for k in ("c_user", "xs", "datr"))
                         checked_at = now
-                    result = {"site": urlsplit(page.url).hostname or "Starting browser", "width": page.viewport_size["width"], "height": page.viewport_size["height"], "ready": ready}
+                    result = {"site": urlsplit(page.url).hostname or "Starting browser", "width": page.viewport_size["width"], "height": page.viewport_size["height"], "ready": ready and not page.is_closed() and session_url(page.url)}
                     if item.get("metadata_only") is not True:
-                        if capture_page is not page:
-                            if capture_session is not None:
-                                try:
-                                    capture_session.detach()
-                                except Exception:
-                                    pass
-                            capture_session = context.new_cdp_session(page)
-                            capture_page = page
                         # Direct compositor capture avoids per-frame font/stability
                         # waits in the general screenshot helper. Nothing is saved.
-                        result["jpeg"] = capture_session.send("Page.captureScreenshot", {
-                            "format": "jpeg", "quality": 65, "fromSurface": True,
-                            "captureBeyondViewport": False, "optimizeForSpeed": True,
-                        })["data"]
+                        result["jpeg"] = capture.jpeg(page)
                 elif action == "input":
                     for event in normalize(item.get("events")):
                         apply_input(event)
@@ -134,7 +124,7 @@ def main():
                     apply_input(normalize([item])[0])
                     result = {}
                 elif action == "capture":
-                    if not facebook_url(page.url) or any(part in urlsplit(page.url).path.lower() for part in ("login", "checkpoint", "recover")):
+                    if page.is_closed() or not session_url(page.url):
                         raise ValueError
                     result = {"cookies": {c["name"]: c["value"] for c in context.cookies(["https://www.facebook.com/"]) if c["name"] in COOKIE_NAMES}}
                     if not all(result["cookies"].get(k) for k in ("c_user", "xs", "datr")):
@@ -147,6 +137,7 @@ def main():
                     import traceback
                     traceback.print_exc(file=sys.stderr)
                 print(json.dumps({"id": request_id, "ok": False}), flush=True)  # Never print provider, page, or input details.
+        capture.reset()
         context.close()
         browser.close()
     tunnel.shutdown()

@@ -1,10 +1,10 @@
 "use strict";
 (() => {
   const $ = id => document.getElementById(id);
-  let csrf = "", active = false, ready = false, frameBusy = false, finished = false, viewGeneration = 0, reconnectTimer = null, fallbackTimer = null, statusBusy = false, compatibility = false;
+  let csrf = "", active = false, ready = false, frameBusy = false, finished = false, finishing = false, viewGeneration = 0, viewFailures = 0, reconnectTimer = null, fallbackTimer = null, statusBusy = false, progressRequest = null, compatibility = false, errorKind = "";
   let invitation = location.hash.slice(1);
-  const showError = text => { $("setup-error").textContent = text; $("setup-error").hidden = false; };
-  const hideError = () => { $("setup-error").hidden = true; };
+  const showError = (text, kind = "setup") => { errorKind = kind; $("setup-error").textContent = text; $("setup-error").hidden = false; };
+  const hideError = () => { errorKind = ""; $("setup-error").hidden = true; };
   const inputs = new MessengerRemote.InputQueue(events => api("input", {events}), error => showError(error.message));
   function stopView() {
     viewGeneration += 1;
@@ -17,11 +17,17 @@
     if (old.startsWith("blob:")) URL.revokeObjectURL(old);
   }
   function resetInput() { inputs.clear(); $("remote-typing").value = ""; }
+  function setFinishing(value) {
+    finishing = value;
+    $("finish-facebook").disabled = value || finished || !ready || !$("approve-session").checked;
+    $("finish-facebook").textContent = value ? "Connecting…" : "Connect & continue ↗";
+    for (const id of ["remote-typing", "remote-enter", "reload-browser", "start-browser"]) $(id).disabled = value;
+  }
 
   addEventListener("hashchange", () => {
     const next = location.hash.slice(1);
     if (!next) return;
-    invitation = next; csrf = ""; active = false; finished = false; ready = false; stopView(); resetInput();
+    invitation = next; csrf = ""; active = false; finished = false; ready = false; viewFailures = 0; setFinishing(false); stopView(); resetInput();
     hideError(); $("claim-form").reset();
     $("welcome").hidden = false; $("facebook").hidden = true; $("telegram").hidden = true;
     $("remote-screen").hidden = true; $("remote-placeholder").hidden = false;
@@ -29,29 +35,45 @@
   });
   async function api(action, body, anonymous = false) {
     const auth = csrf;
-    const response = await fetch("/setup/api/" + action, {method: body === undefined ? "GET" : "POST", credentials: "same-origin", cache: "no-store", headers: {"Content-Type": "application/json", ...(anonymous ? {} : {"X-Setup-CSRF": auth})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
-    const data = await response.json();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), action === "start" ? 50000 : action === "finish" ? 45000 : 20000);
+    let response, data;
+    try {
+      response = await fetch("/setup/api/" + action, {method: body === undefined ? "GET" : "POST", credentials: "same-origin", cache: "no-store", signal: controller.signal, headers: {"Content-Type": "application/json", ...(anonymous ? {} : {"X-Setup-CSRF": auth})}, ...(body === undefined ? {} : {body: JSON.stringify(body)})});
+      data = await response.json();
+    } catch (error) { throw new Error("The connection was interrupted. Please try again."); }
+    finally { clearTimeout(timeout); }
     if (!response.ok) {
-      if (response.status === 401 && auth === csrf) { active = false; finished = true; stopView(); resetInput(); $("remote-screen").hidden = true; showError(data.error || "This setup session has expired or was disabled. Ask for a new invitation."); }
+      if (response.status === 401 && auth === csrf) { csrf = ""; active = false; finished = true; setFinishing(false); stopView(); resetInput(); $("remote-screen").hidden = true; showError(data.error || "This setup session has expired or was disabled. Ask for a new invitation."); }
       throw new Error(data.error || "Setup could not continue. Please try again.");
     }
     return data;
   }
   function progress(data) {
+    if (finished && data.state !== "completed") return; // Ignore an older in-flight status response.
     csrf = data.csrf;
     finished = data.state === "completed";
     $("welcome").hidden = true; $("facebook").hidden = finished; $("telegram").hidden = !finished;
     $("step-welcome").classList.remove("current");
     $("step-facebook").classList.toggle("current", !finished); $("step-telegram").classList.toggle("current", finished);
     if (finished) {
-      active = false; stopView(); resetInput();
+      active = false; setFinishing(false); stopView(); resetInput(); hideError();
       $("telegram-invite").hidden = !data.telegram_url;
       if (data.telegram_url && /^https:\/\/t\.me\/[A-Za-z0-9_]+\?start=[A-Za-z0-9_-]+$/.test(data.telegram_url)) $("telegram-invite").href = data.telegram_url;
       $("pairing-status").textContent = ({waiting: "Open Telegram above and press Start to connect your private chat.", pending_approval: "Telegram connected. Your administrator will approve your identity and start the logger.", approved: "Your Telegram destination is approved. Your administrator controls when capture starts.", expired: "The Telegram invitation expired. Ask your administrator for a new Telegram invitation."})[data.pairing];
     }
   }
-  async function status() {
-    try { const data = await api("status"); if (!invitation) progress(data); } catch (error) { if (!invitation) showError(error.message); }
+  async function status(reportErrors = true) {
+    const auth = csrf;
+    if (progressRequest?.auth === auth) return progressRequest.promise;
+    const pending = {auth};
+    pending.promise = (async () => {
+      try { const data = await api("status"); if (!invitation && auth === csrf) progress(data); return data; }
+      catch (error) { if (reportErrors && !invitation && auth === csrf) showError(error.message); return null; }
+      finally { if (progressRequest === pending) progressRequest = null; }
+    })();
+    progressRequest = pending;
+    return pending.promise;
   }
   $("claim-form").addEventListener("submit", async event => {
     event.preventDefault(); hideError(); $("claim-button").disabled = true;
@@ -61,21 +83,32 @@
     } catch (error) { showError(error.message); } finally { $("claim-button").disabled = false; }
   });
   function metadata(data) {
+    viewFailures = 0;
     const screen = $("remote-screen");
     if (screen.getAttribute("width") !== String(data.width) || screen.getAttribute("height") !== String(data.height)) { screen.width = data.width; screen.height = data.height; }
     $("remote-site").textContent = data.site; ready = data.ready;
-    $("facebook-ready").textContent = ready ? "A signed-in session was detected. Confirm below when you have finished Facebook's checks." : "Sign in to Facebook first. Then confirm the connection here.";
-    $("finish-facebook").disabled = !ready || !$("approve-session").checked;
+    if (errorKind === "view") hideError();
+    $("facebook-ready").textContent = finishing ? "Saving this connection and preparing Telegram…" : ready ? "A signed-in session was detected. Confirm below when you have finished Facebook's checks." : "Finish signing in and complete any Facebook checks. Then confirm this connection here.";
+    $("finish-facebook").disabled = finishing || !ready || !$("approve-session").checked;
   }
   async function viewStatus() {
-    if (!active || finished || statusBusy || document.hidden) return;
+    if (!active || finished || finishing || statusBusy || document.hidden) return;
     statusBusy = true; const generation = viewGeneration;
     try { const data = await api("view", {}); if (active && generation === viewGeneration) metadata(data); }
-    catch (error) { if (active && generation === viewGeneration) showError(error.message); }
+    catch (error) {
+      if (active && !finishing && generation === viewGeneration) {
+        showError(error.message, "view");
+        if (++viewFailures >= 3) {
+          active = false; ready = false; stopView(); resetInput(); setFinishing(false);
+          $("remote-screen").hidden = true; $("remote-placeholder").hidden = false;
+          showError("The temporary browser disconnected. Reopen it to continue. A saved connection will be recovered automatically.", "view");
+        }
+      }
+    }
     finally { if (generation === viewGeneration) statusBusy = false; }
   }
   async function frame() {
-    if (!active || finished || frameBusy || document.hidden || !compatibility) return;
+    if (!active || finished || finishing || frameBusy || document.hidden || !compatibility) return;
     frameBusy = true; const generation = viewGeneration;
     try {
       const data = await api("frame", {});
@@ -88,17 +121,17 @@
       $("remote-screen").src = url; $("remote-screen").hidden = false; $("remote-placeholder").hidden = true;
       if (previous.startsWith("blob:")) URL.revokeObjectURL(previous);
       metadata(data);
-    } catch (error) { if (active && generation === viewGeneration) showError(error.message); }
-    finally { if (generation === viewGeneration) { frameBusy = false; if (active && compatibility && !document.hidden) fallbackTimer = setTimeout(frame, 250); } }
+    } catch (error) { if (active && !finishing && generation === viewGeneration) showError(error.message, "view"); }
+    finally { if (generation === viewGeneration) { frameBusy = false; if (active && !finishing && compatibility && !document.hidden) fallbackTimer = setTimeout(frame, 250); } }
   }
   function startView(attempt = 0) {
     stopView();
-    if (!active || finished || document.hidden) return;
+    if (!active || finished || finishing || document.hidden) return;
     const generation = viewGeneration;
     if (compatibility) { frame(); return; }
     const screen = $("remote-screen");
     screen.onerror = () => {
-      if (!active || document.hidden || generation !== viewGeneration) return;
+      if (!active || finishing || document.hidden || generation !== viewGeneration) return;
       if (attempt >= 2) { compatibility = true; startView(); }
       else reconnectTimer = setTimeout(() => startView(attempt + 1), 400 * (attempt + 1));
     };
@@ -108,15 +141,17 @@
   }
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stopView();
-    else if (active && !finished) startView();
+    else if (active && !finished && !finishing) startView();
   });
   $("start-browser").addEventListener("click", async () => {
+    const auth = csrf;
     hideError(); $("start-browser").disabled = true; $("start-browser").textContent = "Opening your browser…";
-    try { await api("start", {mobile: matchMedia("(max-width: 760px)").matches}); active = true; compatibility = false; await viewStatus(); startView(); } catch (error) { showError(error.message); }
-    finally { $("start-browser").disabled = false; $("start-browser").textContent = "Open Facebook ↗"; }
+    try { await api("start", {mobile: matchMedia("(max-width: 760px)").matches}); if (auth !== csrf || finished) return; active = true; compatibility = false; await viewStatus(); startView(); }
+    catch (error) { if (auth === csrf) { await status(false); if (!finished) showError(error.message); } }
+    finally { if (auth === csrf) { $("start-browser").disabled = finishing; $("start-browser").textContent = "Open Facebook ↗"; } }
   });
   function input(data) {
-    if (!active || finished) return;
+    if (!active || finished || finishing) return;
     inputs.push(data, data.action === "click" || data.action === "key" || data.action === "reload");
   }
   let touch = null, suppressClickUntil = 0;
@@ -173,17 +208,42 @@
   }, {passive: false});
   $("remote-enter").addEventListener("click", () => input({action: "key", key: "Enter"}));
   $("reload-browser").addEventListener("click", () => input({action: "reload"}));
-  $("approve-session").addEventListener("change", () => { $("finish-facebook").disabled = !ready || !$("approve-session").checked; });
+  $("approve-session").addEventListener("change", () => { $("finish-facebook").disabled = finishing || !ready || !$("approve-session").checked; });
   $("finish-facebook").addEventListener("click", async () => {
-    hideError(); $("finish-facebook").disabled = true;
-    try { await inputs.drain(); progress(await api("finish", {approve: $("approve-session").checked})); }
-    catch (error) { showError(error.message); $("finish-facebook").disabled = !ready || !$("approve-session").checked; }
+    if (finishing || finished || !$("approve-session").checked) return;
+    const auth = csrf;
+    hideError(); setFinishing(true); stopView();
+    $("remote-screen").hidden = true; $("remote-placeholder").hidden = false;
+    $("facebook-ready").textContent = "Saving this connection and preparing Telegram…";
+    try {
+      try { await inputs.drain(); }
+      catch (inputError) {
+        // Never replay an ambiguous login click. A fresh read-only check can
+        // confirm that authentication succeeded despite its lost response.
+        const view = await api("view", {});
+        if (auth !== csrf) return;
+        metadata(view);
+        if (!view.ready) throw inputError;
+        inputs.clear();
+      }
+      if (auth !== csrf || finished) return;
+      const result = await api("finish", {approve: $("approve-session").checked});
+      if (auth === csrf) progress(result);
+    } catch (error) {
+      if (auth !== csrf || finished) return;
+      // The server may have committed the session and closed the browser
+      // before the response arrived. Recover by reading state, never resending.
+      try { const saved = await api("status"); if (auth === csrf) progress(saved); } catch (ignored) {}
+      if (auth === csrf && !finished) showError(error.message);
+    } finally {
+      if (auth === csrf) { setFinishing(false); if (active && !finished) startView(); }
+    }
   });
   $("cancel-setup").addEventListener("click", async () => {
-    try { await api("cancel", {}); active = false; finished = true; stopView(); resetInput(); $("facebook").hidden = true; showError("Setup cancelled. This invitation can no longer be used."); }
+    try { await api("cancel", {}); csrf = ""; active = false; finished = true; setFinishing(false); stopView(); resetInput(); $("facebook").hidden = true; showError("Setup cancelled. This invitation can no longer be used."); }
     catch (error) { showError(error.message); }
   });
   setInterval(viewStatus, 800);
-  setInterval(() => { if (csrf && (finished || !active)) status(); }, 6000);
+  setInterval(() => { if (csrf) status(false); }, 3000);
   if (!invitation) status();
 })();

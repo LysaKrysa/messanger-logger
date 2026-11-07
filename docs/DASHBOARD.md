@@ -258,6 +258,18 @@ display can shrink on mobile or change with page zoom without moving the remote
 click target. An older viewer used the CSS display dimensions for both sides
 of this conversion, causing misplaced clicks when the image was scaled.
 
+During **Connect & continue**, the viewer pauses and the confirmation button
+stays disabled. The page checks saved setup progress even while the browser
+is active, and moves to Telegram once confirmation is committed, including
+when the original response is lost or browser cleanup is still finishing.
+Login clicks and confirmation are not automatically resent after an ambiguous
+response. An earlier input error can be cleared for handoff only after a fresh
+read-only readiness check; consent and server-side confirmation still apply.
+Transient screenshot target failures discard that capture session so a later
+frame can recover. Repeated browser metadata failures show **Open Facebook**
+again, and completed setup is recovered independently. If Chromium exits before
+the connection was confirmed and saved, reopen the browser and sign in again.
+
 Facebook can show Google reCAPTCHA or Arkose Labs MatchKey for verification;
 the provider named in the Meta notice can differ between sessions. Older
 browser releases blocked these dependencies, leaving the notice with no challenge.

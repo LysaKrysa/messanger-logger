@@ -11,6 +11,7 @@ import threading
 import time
 
 from cryptography.fernet import Fernet
+from flask import request
 from playwright.sync_api import sync_playwright
 from werkzeug.serving import make_server
 
@@ -46,6 +47,12 @@ def main():
         origin = "https://127.0.0.1:" + str(port)
         offline = OfflineBrowser()
         app = create_app(store, origin=origin, status_root=status, browser_client=offline)
+        @app.after_request
+        def simulate_lost_handoff_response(response):
+            if request.path == "/setup/api/finish" and offline.lose_finish_response and response.status_code == 200:
+                response = app.json.response({"error": "Synthetic response lost after the session was saved"})
+                response.status_code = 503
+            return response
         server = make_server("127.0.0.1", port, app, ssl_context="adhoc", threaded=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()

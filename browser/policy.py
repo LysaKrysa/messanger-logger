@@ -48,6 +48,14 @@ def facebook_url(url):
     return parsed is not None and facebook_host(parsed.hostname)
 
 
+def session_url(url):
+    """Use the same existing URL eligibility for readiness and confirmation."""
+    parsed = https_url(url)
+    return parsed is not None and facebook_host(parsed.hostname) and not any(
+        part in parsed.path.lower() for part in ("login", "checkpoint", "recover")
+    )
+
+
 def allowed_url(url):
     parsed = https_url(url)
     if parsed is None:
